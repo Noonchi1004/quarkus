@@ -28,11 +28,12 @@ public class KafkaDevServicesDevModeTestCase {
             "mp.messaging.outgoing.generated-price.topic=prices\n" +
             "mp.messaging.incoming.prices.connector=smallrye-kafka\n" +
             "mp.messaging.incoming.prices.health-readiness-enabled=false\n" +
-            "mp.messaging.incoming.prices.topic=prices\n";
+            "mp.messaging.incoming.prices.topic=prices\n" +
+            "quarkus.application.name=\n";
 
     @RegisterExtension
     public static QuarkusDevModeTest test = new QuarkusDevModeTest()
-            .setArchiveProducer(new Supplier<JavaArchive>() {
+            .setArchiveProducer(new Supplier<>() {
                 @Override
                 public JavaArchive get() {
                     return ShrinkWrap.create(JavaArchive.class)

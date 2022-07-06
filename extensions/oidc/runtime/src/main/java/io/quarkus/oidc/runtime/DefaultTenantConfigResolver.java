@@ -1,5 +1,7 @@
 package io.quarkus.oidc.runtime;
 
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
 import javax.annotation.PostConstruct;
@@ -60,6 +62,8 @@ public class DefaultTenantConfigResolver {
 
     private volatile boolean securityEventObserved;
 
+    private ConcurrentHashMap<String, TokenVerificationResult> backChannelLogoutTokens = new ConcurrentHashMap<>();
+
     @PostConstruct
     public void verifyResolvers() {
         if (tenantConfigResolver.isResolvable() && tenantConfigResolver.isAmbiguous()) {
@@ -105,7 +109,7 @@ public class DefaultTenantConfigResolver {
                 TenantConfigContext tenantContext = getStaticTenantContext(context);
                 if (tenantContext != null && !tenantContext.ready) {
 
-                    // check if it the connection has already been created
+                    // check if the connection has already been created
                     TenantConfigContext readyTenantContext = tenantConfigBean.getDynamicTenantsConfig()
                             .get(tenantContext.oidcConfig.tenantId.get());
                     if (readyTenantContext == null) {
@@ -217,6 +221,14 @@ public class DefaultTenantConfigResolver {
 
     boolean isEnableHttpForwardedPrefix() {
         return enableHttpForwardedPrefix;
+    }
+
+    public Map<String, TokenVerificationResult> getBackChannelLogoutTokens() {
+        return backChannelLogoutTokens;
+    }
+
+    public TenantConfigBean getTenantConfigBean() {
+        return tenantConfigBean;
     }
 
 }

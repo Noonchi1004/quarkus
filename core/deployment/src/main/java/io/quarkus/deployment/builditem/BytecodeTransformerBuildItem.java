@@ -12,7 +12,7 @@ public final class BytecodeTransformerBuildItem extends MultiBuildItem {
 
     /**
      * If this is true it means the class should be loaded eagerly by a thread pool in dev mode
-     * on multi threaded systems.
+     * on multithreaded systems.
      * <p>
      * Transformation is expensive, so doing it this way can speed up boot time.
      */
@@ -41,6 +41,8 @@ public final class BytecodeTransformerBuildItem extends MultiBuildItem {
     final boolean cacheable;
 
     final int classReaderOptions;
+
+    final boolean continueOnFailure;
 
     public BytecodeTransformerBuildItem(String classToTransform,
             BiFunction<String, ClassVisitor, ClassVisitor> visitorFunction) {
@@ -78,6 +80,7 @@ public final class BytecodeTransformerBuildItem extends MultiBuildItem {
         this.cacheable = cacheable;
         this.inputTransformer = null;
         this.classReaderOptions = 0;
+        this.continueOnFailure = false;
     }
 
     public BytecodeTransformerBuildItem(Builder builder) {
@@ -88,6 +91,7 @@ public final class BytecodeTransformerBuildItem extends MultiBuildItem {
         this.cacheable = builder.cacheable;
         this.inputTransformer = builder.inputTransformer;
         this.classReaderOptions = builder.classReaderOptions;
+        this.continueOnFailure = builder.continueOnFailure;
         if (visitorFunction == null && inputTransformer == null) {
             throw new IllegalArgumentException("One of either visitorFunction or inputTransformer must be set");
         }
@@ -121,14 +125,24 @@ public final class BytecodeTransformerBuildItem extends MultiBuildItem {
         return inputTransformer;
     }
 
+    public boolean isContinueOnFailure() {
+        return continueOnFailure;
+    }
+
     public static class Builder {
         public BiFunction<String, byte[], byte[]> inputTransformer;
+        public boolean continueOnFailure;
         private String classToTransform;
         private BiFunction<String, ClassVisitor, ClassVisitor> visitorFunction;
         private Set<String> requireConstPoolEntry = null;
         private boolean eager = false;
         private boolean cacheable = false;
         private int classReaderOptions = 0;
+
+        public Builder setContinueOnFailure(boolean continueOnFailure) {
+            this.continueOnFailure = continueOnFailure;
+            return this;
+        }
 
         public Builder setInputTransformer(BiFunction<String, byte[], byte[]> inputTransformer) {
             this.inputTransformer = inputTransformer;

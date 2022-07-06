@@ -44,7 +44,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.ListIterator;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -81,7 +80,6 @@ public class BeanGenerator extends AbstractGenerator {
     protected static final String FIELD_NAME_QUALIFIERS = "qualifiers";
     protected static final String FIELD_NAME_STEREOTYPES = "stereotypes";
     protected static final String FIELD_NAME_PROXY = "proxy";
-    protected static final String FIELD_NAME_PARAMS = "params";
 
     protected final AnnotationLiteralProcessor annotationLiterals;
     protected final Predicate<DotName> applicationClassPredicate;
@@ -182,39 +180,9 @@ public class BeanGenerator extends AbstractGenerator {
                 Collections.emptyMap(), Collections.emptyMap(),
                 annotationLiterals, reflectionRegistration);
 
-        FieldCreator params = beanCreator.getFieldCreator(FIELD_NAME_PARAMS, Map.class)
-                .setModifiers(ACC_PRIVATE | ACC_FINAL);
+        SyntheticComponentsUtil.addParamsFieldAndInit(beanCreator, constructor, bean.getParams(), annotationLiterals,
+                bean.getDeployment().getBeanArchiveIndex());
 
-        // If needed, store the synthetic bean parameters
-        ResultHandle paramsHandle;
-        if (bean.getParams().isEmpty()) {
-            paramsHandle = constructor.invokeStaticMethod(MethodDescriptors.COLLECTIONS_EMPTY_MAP);
-        } else {
-            paramsHandle = constructor.newInstance(MethodDescriptor.ofConstructor(HashMap.class));
-            for (Entry<String, Object> entry : bean.getParams().entrySet()) {
-                ResultHandle valHandle = null;
-                if (entry.getValue() instanceof String) {
-                    valHandle = constructor.load(entry.getValue().toString());
-                } else if (entry.getValue() instanceof Integer) {
-                    valHandle = constructor.newInstance(MethodDescriptor.ofConstructor(Integer.class, int.class),
-                            constructor.load(((Integer) entry.getValue()).intValue()));
-                } else if (entry.getValue() instanceof Long) {
-                    valHandle = constructor.newInstance(MethodDescriptor.ofConstructor(Long.class, long.class),
-                            constructor.load(((Long) entry.getValue()).longValue()));
-                } else if (entry.getValue() instanceof Double) {
-                    valHandle = constructor.newInstance(MethodDescriptor.ofConstructor(Double.class, double.class),
-                            constructor.load(((Double) entry.getValue()).doubleValue()));
-                } else if (entry.getValue() instanceof Class) {
-                    valHandle = constructor.loadClass((Class<?>) entry.getValue());
-                } else if (entry.getValue() instanceof Boolean) {
-                    valHandle = constructor.load((Boolean) entry.getValue());
-                }
-                // TODO other param types
-                constructor.invokeInterfaceMethod(MethodDescriptors.MAP_PUT, paramsHandle, constructor.load(entry.getKey()),
-                        valHandle);
-            }
-        }
-        constructor.writeInstanceField(params.getFieldDescriptor(), constructor.getThis(), paramsHandle);
         constructor.returnValue(null);
 
         implementGetIdentifier(bean, beanCreator);
@@ -249,6 +217,7 @@ public class BeanGenerator extends AbstractGenerator {
         implementGetKind(beanCreator, InjectableBean.Kind.SYNTHETIC);
         implementEquals(bean, beanCreator);
         implementHashCode(bean, beanCreator);
+        implementToString(beanCreator);
 
         beanCreator.close();
         return classOutput.getResources();
@@ -342,6 +311,7 @@ public class BeanGenerator extends AbstractGenerator {
         implementIsSuppressed(bean, beanCreator);
         implementEquals(bean, beanCreator);
         implementHashCode(bean, beanCreator);
+        implementToString(beanCreator);
 
         beanCreator.close();
         return classOutput.getResources();
@@ -364,7 +334,7 @@ public class BeanGenerator extends AbstractGenerator {
                 .append(UNDERSCORE)
                 .append(producerMethod.returnType().name().toString());
 
-        for (Type i : producerMethod.parameters()) {
+        for (Type i : producerMethod.parameterTypes()) {
             sigBuilder.append(i.name().toString());
         }
 
@@ -445,6 +415,7 @@ public class BeanGenerator extends AbstractGenerator {
         implementIsSuppressed(bean, beanCreator);
         implementEquals(bean, beanCreator);
         implementHashCode(bean, beanCreator);
+        implementToString(beanCreator);
 
         beanCreator.close();
         return classOutput.getResources();
@@ -533,6 +504,7 @@ public class BeanGenerator extends AbstractGenerator {
         implementIsSuppressed(bean, beanCreator);
         implementEquals(bean, beanCreator);
         implementHashCode(bean, beanCreator);
+        implementToString(beanCreator);
 
         beanCreator.close();
         return classOutput.getResources();
@@ -589,7 +561,7 @@ public class BeanGenerator extends AbstractGenerator {
         initConstructor(classOutput, beanCreator, bean, injectionPointToProviderField, interceptorToProviderField,
                 decoratorToProviderSupplierField,
                 annotationLiterals, reflectionRegistration)
-                        .returnValue(null);
+                .returnValue(null);
     }
 
     protected MethodCreator initConstructor(ClassOutput classOutput, ClassCreator beanCreator, BeanInfo bean,
@@ -739,8 +711,7 @@ public class BeanGenerator extends AbstractGenerator {
                     // Create the annotation literal first
                     ClassInfo qualifierClass = bean.getDeployment().getQualifier(qualifierAnnotation.name());
                     constructor.writeArrayValue(qualifiersArray, constructor.load(qualifierIndex++),
-                            annotationLiterals.process(constructor, classOutput,
-                                    qualifierClass, qualifierAnnotation, Types.getPackageName(beanCreator.getClassName())));
+                            annotationLiterals.create(constructor, qualifierClass, qualifierAnnotation));
                 }
             }
             constructor.writeInstanceField(
@@ -834,10 +805,10 @@ public class BeanGenerator extends AbstractGenerator {
                         declaringProviderInstanceHandle);
             }
 
-            ResultHandle[] referenceHandles = new ResultHandle[disposerMethod.parameters().size()];
+            ResultHandle[] referenceHandles = new ResultHandle[disposerMethod.parametersCount()];
             int disposedParamPosition = bean.getDisposer().getDisposedParameter().position();
             Iterator<InjectionPointInfo> injectionPointsIterator = bean.getDisposer().getInjection().injectionPoints.iterator();
-            for (int i = 0; i < disposerMethod.parameters().size(); i++) {
+            for (int i = 0; i < disposerMethod.parametersCount(); i++) {
                 if (i == disposedParamPosition) {
                     referenceHandles[i] = destroy.getMethodParam(0);
                 } else {
@@ -862,7 +833,7 @@ public class BeanGenerator extends AbstractGenerator {
                 ResultHandle argsArray = destroy.newArray(Object.class, destroy.load(referenceHandles.length));
                 for (int i = 0; i < referenceHandles.length; i++) {
                     destroy.writeArrayValue(paramTypesArray, i,
-                            destroy.loadClass(disposerMethod.parameters().get(i).name().toString()));
+                            destroy.loadClass(disposerMethod.parameterType(i).name().toString()));
                     destroy.writeArrayValue(argsArray, i, referenceHandles[i]);
                 }
                 reflectionRegistration.registerMethod(disposerMethod);
@@ -1205,7 +1176,7 @@ public class BeanGenerator extends AbstractGenerator {
             ResultHandle argsArray = create.newArray(Object.class, create.load(referenceHandles.length));
             for (int i = 0; i < referenceHandles.length; i++) {
                 create.writeArrayValue(paramTypesArray, i,
-                        create.loadClass(producerMethod.parameters().get(i).name().toString()));
+                        create.loadClass(producerMethod.parameterType(i).name().toString()));
                 create.writeArrayValue(argsArray, i, referenceHandles[i]);
             }
             reflectionRegistration.registerMethod(producerMethod);
@@ -1401,8 +1372,7 @@ public class BeanGenerator extends AbstractGenerator {
                 // Create annotation literals first
                 ClassInfo bindingClass = bean.getDeployment().getInterceptorBinding(binding.name());
                 create.writeArrayValue(bindingsArray, bindingsIndex++,
-                        annotationLiterals.process(create, classOutput, bindingClass, binding,
-                                Types.getPackageName(beanCreator.getClassName())));
+                        annotationLiterals.create(create, bindingClass, binding));
             }
 
             ResultHandle invocationContextHandle = create.invokeStaticMethod(
@@ -1503,7 +1473,7 @@ public class BeanGenerator extends AbstractGenerator {
                 ResultHandle argsArray = create.newArray(Object.class, create.load(referenceHandles.length));
                 for (int i = 0; i < referenceHandles.length; i++) {
                     create.writeArrayValue(paramTypesArray, i,
-                            create.loadClass(initializerMethod.parameters().get(i).name().toString()));
+                            create.loadClass(initializerMethod.parameterType(i).name().toString()));
                     create.writeArrayValue(argsArray, i, referenceHandles[i]);
                 }
                 reflectionRegistration.registerMethod(initializerMethod);
@@ -1532,8 +1502,7 @@ public class BeanGenerator extends AbstractGenerator {
                 // Create annotation literals first
                 ClassInfo bindingClass = bean.getDeployment().getInterceptorBinding(binding.name());
                 create.writeArrayValue(bindingsArray, bindingsIndex++,
-                        annotationLiterals.process(create, classOutput, bindingClass, binding,
-                                Types.getPackageName(beanCreator.getClassName())));
+                        annotationLiterals.create(create, bindingClass, binding));
 
             }
 
@@ -1593,17 +1562,8 @@ public class BeanGenerator extends AbstractGenerator {
             // We can optimize if:
             // 1) class bean - has no @PreDestroy interceptor and there is no @PreDestroy callback
             // 2) producer - there is no disposal method
-            boolean canBeOptimized = false;
-            if (bean.isClassBean()) {
-                canBeOptimized = bean.getLifecycleInterceptors(InterceptionType.PRE_DESTROY).isEmpty()
-                        && Beans.getCallbacks(bean.getTarget().get().asClass(),
-                                DotNames.PRE_DESTROY,
-                                bean.getDeployment().getBeanArchiveIndex()).isEmpty();
-            } else if (bean.isProducerMethod() || bean.isProducerField()) {
-                canBeOptimized = bean.getDisposer() == null;
-            }
-
-            if (canBeOptimized) {
+            // 3) synthetic bean - has no destruction logic
+            if (!bean.hasDestroyLogic()) {
                 // If there is no dependency in the creational context we don't have to store the instance in the CreationalContext
                 ResultHandle creationalContext = get.checkCast(get.getMethodParam(0), CreationalContextImpl.class);
                 get.ifNonZero(
@@ -1704,6 +1664,11 @@ public class BeanGenerator extends AbstractGenerator {
         MethodCreator hashCode = beanCreator.getMethodCreator("hashCode", int.class).setModifiers(ACC_PUBLIC);
         final ResultHandle constantHashCodeResult = hashCode.load(bean.getIdentifier().hashCode());
         hashCode.returnValue(constantHashCodeResult);
+    }
+
+    protected void implementToString(ClassCreator beanCreator) {
+        MethodCreator toString = beanCreator.getMethodCreator("toString", String.class).setModifiers(ACC_PUBLIC);
+        toString.returnValue(toString.invokeStaticMethod(MethodDescriptors.BEANS_TO_STRING, toString.getThis()));
     }
 
     /**
@@ -1861,8 +1826,8 @@ public class BeanGenerator extends AbstractGenerator {
                 // Reflections.findConstructor(org.foo.SimpleBean.class,java.lang.String.class)
                 ResultHandle[] paramsHandles = new ResultHandle[2];
                 paramsHandles[0] = constructor.loadClass(method.declaringClass().name().toString());
-                ResultHandle paramsArray = constructor.newArray(Class.class, constructor.load(method.parameters().size()));
-                for (ListIterator<Type> iterator = method.parameters().listIterator(); iterator.hasNext();) {
+                ResultHandle paramsArray = constructor.newArray(Class.class, constructor.load(method.parametersCount()));
+                for (ListIterator<Type> iterator = method.parameterTypes().listIterator(); iterator.hasNext();) {
                     constructor.writeArrayValue(paramsArray, iterator.nextIndex(),
                             constructor.loadClass(iterator.next().name().toString()));
                 }
@@ -1874,8 +1839,8 @@ public class BeanGenerator extends AbstractGenerator {
                 ResultHandle[] paramsHandles = new ResultHandle[3];
                 paramsHandles[0] = constructor.loadClass(method.declaringClass().name().toString());
                 paramsHandles[1] = constructor.load(method.name());
-                ResultHandle paramsArray = constructor.newArray(Class.class, constructor.load(method.parameters().size()));
-                for (ListIterator<Type> iterator = method.parameters().listIterator(); iterator.hasNext();) {
+                ResultHandle paramsArray = constructor.newArray(Class.class, constructor.load(method.parametersCount()));
+                for (ListIterator<Type> iterator = method.parameterTypes().listIterator(); iterator.hasNext();) {
                     constructor.writeArrayValue(paramsArray, iterator.nextIndex(),
                             constructor.loadClass(iterator.next().name().toString()));
                 }
@@ -1910,9 +1875,7 @@ public class BeanGenerator extends AbstractGenerator {
             } else {
                 // Create annotation literal if needed
                 ClassInfo literalClass = getClassByName(beanDeployment.getBeanArchiveIndex(), annotation.name());
-                annotationHandle = annotationLiterals.process(constructor,
-                        classOutput, literalClass, annotation,
-                        beanCreator != null ? Types.getPackageName(beanCreator.getClassName()) : null);
+                annotationHandle = annotationLiterals.create(constructor, literalClass, annotation);
             }
             constructor.invokeInterfaceMethod(MethodDescriptors.SET_ADD, annotationsHandle,
                     annotationHandle);
@@ -1942,9 +1905,8 @@ public class BeanGenerator extends AbstractGenerator {
                     qualifierHandle = qualifier.getLiteralInstance(constructor);
                 } else {
                     // Create annotation literal if needed
-                    qualifierHandle = annotationLiterals.process(constructor,
-                            classOutput, beanDeployment.getQualifier(qualifierAnnotation.name()), qualifierAnnotation,
-                            beanCreator != null ? Types.getPackageName(beanCreator.getClassName()) : null);
+                    qualifierHandle = annotationLiterals.create(constructor,
+                            beanDeployment.getQualifier(qualifierAnnotation.name()), qualifierAnnotation);
                 }
                 constructor.invokeInterfaceMethod(MethodDescriptors.SET_ADD, requiredQualifiersHandle,
                         qualifierHandle);

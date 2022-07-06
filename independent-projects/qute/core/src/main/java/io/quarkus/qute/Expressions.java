@@ -37,14 +37,17 @@ public final class Expressions {
             String params = value.substring(start + 1, value.length() - 1);
             return splitParts(params, PARAMS_SPLIT_CONFIG);
         }
-        throw Parser.parserError("invalid virtual method in {" + exprValue + "}", origin);
+        throw Parser.error(ParserError.INVALID_VIRTUAL_METHOD, "invalid virtual method in \\{{exprValue}}", origin)
+                .argument("exprValue", exprValue).build();
     }
 
     public static String parseBracketContent(String value, Origin origin, String exprValue) {
         if (value.endsWith(SQUARE_RIGHT_BRACKET)) {
             return value.substring(1, value.length() - 1);
         }
-        throw Parser.parserError("invalid bracket notation expression in {" + exprValue + "}", origin);
+        throw Parser.error(ParserError.INVALID_BRACKET_EXPRESSION,
+                "invalid bracket notation expression in \\{{exprValue}}", origin)
+                .argument("exprValue", exprValue).build();
     }
 
     public static String buildVirtualMethodSignature(String name, List<String> params) {
@@ -196,6 +199,24 @@ public final class Expressions {
 
     };
 
+    static final SplitConfig PARAM_DECLARATION_SPLIT_CONFIG = new SplitConfig() {
+
+        @Override
+        public boolean isSeparator(char candidate) {
+            return ' ' == candidate;
+        }
+
+        public boolean isInfixNotationSupported() {
+            return false;
+        }
+
+        @Override
+        public boolean isLiteralSeparator(char candidate) {
+            return SplitConfig.super.isLiteralSeparator(candidate) || candidate == '<' || candidate == '>';
+        }
+
+    };
+
     private static final SplitConfig TYPE_INFO_SPLIT_CONFIG = new DefaultSplitConfig() {
 
         @Override
@@ -223,7 +244,7 @@ public final class Expressions {
 
     }
 
-    interface SplitConfig {
+    public interface SplitConfig {
 
         boolean isSeparator(char candidate);
 

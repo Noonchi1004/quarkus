@@ -9,12 +9,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 /**
  * Each section consists of one or more blocks. The main block is always present. Additional blocks start with a label
  * definition: <code>{#label param1}</code>.
  */
-public final class SectionBlock {
+public final class SectionBlock implements WithOrigin, ErrorInitializer {
 
     public final Origin origin;
 
@@ -65,12 +66,53 @@ public final class SectionBlock {
         return expressions;
     }
 
+    Expression find(Predicate<Expression> predicate) {
+        for (Expression e : this.expressions.values()) {
+            if (predicate.test(e)) {
+                return e;
+            }
+        }
+        for (TemplateNode node : nodes) {
+            if (node instanceof ExpressionNode) {
+                Expression e = ((ExpressionNode) node).expression;
+                if (predicate.test(e)) {
+                    return e;
+                }
+            } else if (node instanceof SectionNode) {
+                Expression found = ((SectionNode) node).findExpression(predicate);
+                if (found != null) {
+                    return found;
+                }
+            }
+        }
+        return null;
+    }
+
+    List<ParameterDeclaration> getParamDeclarations() {
+        List<ParameterDeclaration> declarations = null;
+        for (TemplateNode node : nodes) {
+            List<ParameterDeclaration> nodeDeclarations = node.getParameterDeclarations();
+            if (!nodeDeclarations.isEmpty()) {
+                if (declarations == null) {
+                    declarations = new ArrayList<>();
+                }
+                declarations.addAll(nodeDeclarations);
+            }
+        }
+        return declarations != null ? declarations : Collections.emptyList();
+    }
+
     @Override
     public String toString() {
         StringBuilder builder = new StringBuilder();
         builder.append("SectionBlock [origin=").append(origin).append(", id=").append(id).append(", label=").append(label)
                 .append("]");
         return builder.toString();
+    }
+
+    @Override
+    public Origin getOrigin() {
+        return origin;
     }
 
     void optimizeNodes(Set<TemplateNode> nodesToRemove) {
@@ -81,9 +123,8 @@ public final class SectionBlock {
             if (node instanceof SectionNode) {
                 effectiveNodes.add(node);
                 ((SectionNode) node).optimizeNodes(nodesToRemove);
-            } else if (node == Parser.COMMENT_NODE || (node instanceof ParameterDeclarationNode)
-                    || nodesToRemove.contains(node)) {
-                // Ignore comments, param declarations and nodes for removal
+            } else if (node == Parser.COMMENT_NODE || nodesToRemove.contains(node)) {
+                // Ignore comments and nodes for removal
                 nodeIgnored = true;
             } else {
                 effectiveNodes.add(node);
@@ -140,8 +181,8 @@ public final class SectionBlock {
     }
 
     static SectionBlock.Builder builder(String id, Function<String, Expression> expressionFunc,
-            Function<String, TemplateException> errorFun) {
-        return new Builder(id, expressionFunc, errorFun).setLabel(id);
+            ErrorInitializer errorInitializer) {
+        return new Builder(id, expressionFunc, errorInitializer).setLabel(id);
     }
 
     static class Builder implements BlockInfo {
@@ -153,13 +194,14 @@ public final class SectionBlock {
         private final List<TemplateNode> nodes;
         private Map<String, Expression> expressions;
         private final Function<String, Expression> expressionFun;
-        private final Function<String, TemplateException> errorFun;
+        private final ErrorInitializer errorInitializer;
 
-        public Builder(String id, Function<String, Expression> expressionFun, Function<String, TemplateException> errorFun) {
+        public Builder(String id, Function<String, Expression> expressionFun,
+                ErrorInitializer errorInitializer) {
             this.id = id;
             this.nodes = new ArrayList<>();
             this.expressionFun = expressionFun;
-            this.errorFun = errorFun;
+            this.errorInitializer = errorInitializer;
         }
 
         SectionBlock.Builder setOrigin(Origin origin) {
@@ -204,8 +246,13 @@ public final class SectionBlock {
         }
 
         @Override
-        public TemplateException createParserError(String message) {
-            return errorFun.apply(message);
+        public Origin getOrigin() {
+            return origin;
+        }
+
+        @Override
+        public TemplateException.Builder error(String message) {
+            return errorInitializer.error(message);
         }
 
         SectionBlock build() {

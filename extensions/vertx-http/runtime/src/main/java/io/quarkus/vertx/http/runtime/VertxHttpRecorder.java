@@ -37,6 +37,7 @@ import java.util.regex.Pattern;
 
 import javax.enterprise.event.Event;
 
+import org.crac.Resource;
 import org.jboss.logging.Logger;
 import org.wildfly.common.cpu.ProcessorInfo;
 
@@ -48,6 +49,8 @@ import io.netty.handler.codec.http.HttpResponseStatus;
 import io.quarkus.arc.Arc;
 import io.quarkus.arc.runtime.BeanContainer;
 import io.quarkus.bootstrap.runner.Timing;
+import io.quarkus.credentials.CredentialsProvider;
+import io.quarkus.credentials.runtime.CredentialsProviderFinder;
 import io.quarkus.dev.spi.DevModeType;
 import io.quarkus.dev.spi.HotReplacementContext;
 import io.quarkus.netty.runtime.virtual.VirtualAddress;
@@ -99,6 +102,7 @@ import io.vertx.core.http.HttpVersion;
 import io.vertx.core.http.impl.Http1xServerConnection;
 import io.vertx.core.impl.ContextInternal;
 import io.vertx.core.impl.EventLoopContext;
+import io.vertx.core.impl.Utils;
 import io.vertx.core.impl.VertxInternal;
 import io.vertx.core.net.JdkSSLEngineOptions;
 import io.vertx.core.net.KeyStoreOptions;
@@ -121,8 +125,14 @@ public class VertxHttpRecorder {
 
     public static final String MAX_REQUEST_SIZE_KEY = "io.quarkus.max-request-size";
 
-    // We do not use Integer.MAX on purpose to allow advanced users to register a route AFTER the default route
+    /** Order mark for route with priority over the default route (add an offset from this mark) **/
+    public static final int BEFORE_DEFAULT_ROUTE_ORDER_MARK = 1_000;
+
+    /** Default route order (i.e. Static Resources, Servlet) **/
     public static final int DEFAULT_ROUTE_ORDER = 10_000;
+
+    /** Order mark for route without priority over the default route (add an offset from this mark) **/
+    public static final int AFTER_DEFAULT_ROUTE_ORDER_MARK = 20_000;
 
     private static final Logger LOGGER = Logger.getLogger(VertxHttpRecorder.class.getName());
 
@@ -141,15 +151,22 @@ public class VertxHttpRecorder {
 
     public static final String GET = "GET";
     private static final Handler<HttpServerRequest> ACTUAL_ROOT = new Handler<HttpServerRequest>() {
+
+        /** JVM system property that disables URI validation, don't use this in production. */
+        private static final String DISABLE_URI_VALIDATION_PROP_NAME = "vertx.disableURIValidation";
+
+        /**
+         * Disables HTTP headers validation, so we can save some processing and save some allocations.
+         */
+        private final boolean DISABLE_URI_VALIDATION = Boolean.getBoolean(DISABLE_URI_VALIDATION_PROP_NAME);
+
         @Override
         public void handle(HttpServerRequest httpServerRequest) {
-            try {
-                // we simply need to know if the URI is valid
-                new URI(httpServerRequest.uri());
-            } catch (URISyntaxException e) {
+            if (!uriValid(httpServerRequest)) {
                 httpServerRequest.response().setStatusCode(400).end();
                 return;
             }
+
             //we need to pause the request to make sure that data does
             //not arrive before handlers have a chance to install a read handler
             //as it is possible filters such as the auth filter can do blocking tasks
@@ -163,6 +180,19 @@ public class VertxHttpRecorder {
                 //very rare race condition, that can happen when dev mode is shutting down
                 httpServerRequest.resume();
                 httpServerRequest.response().setStatusCode(503).end();
+            }
+        }
+
+        private boolean uriValid(HttpServerRequest httpServerRequest) {
+            if (DISABLE_URI_VALIDATION) {
+                return true;
+            }
+            try {
+                // we simply need to know if the URI is valid
+                new URI(httpServerRequest.uri());
+                return true;
+            } catch (URISyntaxException e) {
+                return false;
             }
         }
     };
@@ -337,7 +367,7 @@ public class VertxHttpRecorder {
             defaultRouteHandler.accept(httpRouteRouter.route().order(DEFAULT_ROUTE_ORDER));
         }
 
-        if (httpConfiguration.enableCompression) {
+        if (httpBuildTimeConfig.enableCompression) {
             httpRouteRouter.route().order(0).handler(new Handler<RoutingContext>() {
                 @Override
                 public void handle(RoutingContext ctx) {
@@ -393,6 +423,40 @@ public class VertxHttpRecorder {
                 }
             });
         }
+        // Filter Configuration per path
+        var filtersInConfig = httpConfiguration.filter;
+        if (!filtersInConfig.isEmpty()) {
+            for (var entry : filtersInConfig.entrySet()) {
+                var filterConfig = entry.getValue();
+                var matches = filterConfig.matches;
+                var order = filterConfig.order.orElse(Integer.MIN_VALUE);
+                var methods = filterConfig.methods;
+                var headers = filterConfig.header;
+                if (methods.isEmpty()) {
+                    httpRouteRouter.routeWithRegex(matches)
+                            .order(order)
+                            .handler(new Handler<RoutingContext>() {
+                                @Override
+                                public void handle(RoutingContext event) {
+                                    event.response().headers().setAll(headers);
+                                    event.next();
+                                }
+                            });
+                } else {
+                    for (var method : methods.get()) {
+                        httpRouteRouter.routeWithRegex(HttpMethod.valueOf(method.toUpperCase(Locale.ROOT)), matches)
+                                .order(order)
+                                .handler(new Handler<RoutingContext>() {
+                                    @Override
+                                    public void handle(RoutingContext event) {
+                                        event.response().headers().setAll(headers);
+                                        event.next();
+                                    }
+                                });
+                    }
+                }
+            }
+        }
         // Headers sent on any request, regardless of the response
         Map<String, HeaderConfig> headers = httpConfiguration.header;
         if (!headers.isEmpty()) {
@@ -406,7 +470,7 @@ public class VertxHttpRecorder {
                             .handler(new Handler<RoutingContext>() {
                                 @Override
                                 public void handle(RoutingContext event) {
-                                    event.response().headers().add(name, config.value);
+                                    event.response().headers().set(name, config.value);
                                     event.next();
                                 }
                             });
@@ -457,7 +521,7 @@ public class VertxHttpRecorder {
             root = mainRouter;
         }
 
-        warnIfDeprecatedHttpConfigPropertiesPresent(httpConfiguration);
+        warnIfProxyAddressForwardingAllowedWithMultipleHeaders(httpConfiguration);
         ForwardingProxyOptions forwardingProxyOptions = ForwardingProxyOptions.from(httpConfiguration);
         if (forwardingProxyOptions.proxyAddressForwarding) {
             Handler<HttpServerRequest> delegate = root;
@@ -547,17 +611,18 @@ public class VertxHttpRecorder {
         rootHandler = root;
     }
 
-    private void warnIfDeprecatedHttpConfigPropertiesPresent(HttpConfiguration httpConfiguration) {
-        if (httpConfiguration.proxyAddressForwarding.isPresent()) {
-            LOGGER.warn(
-                    "`quarkus.http.proxy-address-forwarding` is deprecated and will be removed in a future version - it is "
-                            + "recommended to switch to `quarkus.http.proxy.proxy-address-forwarding`");
-        }
+    private void warnIfProxyAddressForwardingAllowedWithMultipleHeaders(HttpConfiguration httpConfiguration) {
+        ProxyConfig proxyConfig = httpConfiguration.proxy;
+        boolean proxyAddressForwardingActivated = proxyConfig.proxyAddressForwarding;
+        boolean forwardedActivated = proxyConfig.allowForwarded;
+        boolean xForwardedActivated = httpConfiguration.proxy.allowXForwarded.orElse(!forwardedActivated);
 
-        if (httpConfiguration.allowForwarded.isPresent()) {
+        if (proxyAddressForwardingActivated && forwardedActivated && xForwardedActivated) {
             LOGGER.warn(
-                    "`quarkus.http.allow-forwarded` is deprecated and will be removed in a future version - it is "
-                            + "recommended to switch to `quarkus.http.proxy.allow-forwarded`");
+                    "The X-Forwarded-* and Forwarded headers will be considered when determining the proxy address. " +
+                            "This configuration can cause a security issue as clients can forge requests and send a " +
+                            "forwarded header that is not overwritten by the proxy. " +
+                            "Please consider use one of these headers just to forward the proxy address in requests.");
         }
     }
 
@@ -565,8 +630,10 @@ public class VertxHttpRecorder {
             HttpConfiguration httpConfiguration, LaunchMode launchMode,
             Supplier<Integer> eventLoops, List<String> websocketSubProtocols, boolean auxiliaryApplication) throws IOException {
         // Http server configuration
-        HttpServerOptions httpServerOptions = createHttpServerOptions(httpConfiguration, launchMode, websocketSubProtocols);
-        HttpServerOptions domainSocketOptions = createDomainSocketOptions(httpConfiguration, websocketSubProtocols);
+        HttpServerOptions httpServerOptions = createHttpServerOptions(httpBuildTimeConfig, httpConfiguration, launchMode,
+                websocketSubProtocols);
+        HttpServerOptions domainSocketOptions = createDomainSocketOptions(httpBuildTimeConfig, httpConfiguration,
+                websocketSubProtocols);
         HttpServerOptions sslConfig = createSslOptions(httpBuildTimeConfig, httpConfiguration, launchMode,
                 websocketSubProtocols);
 
@@ -597,15 +664,18 @@ public class VertxHttpRecorder {
                 if (event.failed()) {
                     Throwable effectiveCause = event.cause();
                     if (effectiveCause instanceof BindException) {
+                        List<Integer> portsUsed = Collections.emptyList();
+
                         if ((sslConfig == null) && (httpServerOptions != null)) {
-                            effectiveCause = new QuarkusBindException(httpServerOptions.getPort());
+                            portsUsed = List.of(httpServerOptions.getPort());
                         } else if ((httpConfiguration.insecureRequests == InsecureRequests.DISABLED) && (sslConfig != null)) {
-                            effectiveCause = new QuarkusBindException(sslConfig.getPort());
+                            portsUsed = List.of(sslConfig.getPort());
                         } else if ((sslConfig != null) && (httpConfiguration.insecureRequests == InsecureRequests.ENABLED)
                                 && (httpServerOptions != null)) {
-                            effectiveCause = new QuarkusBindException(
-                                    List.of(httpServerOptions.getPort(), sslConfig.getPort()));
+                            portsUsed = List.of(httpServerOptions.getPort(), sslConfig.getPort());
                         }
+
+                        effectiveCause = new QuarkusBindException((BindException) effectiveCause, portsUsed);
                     }
                     futureResult.completeExceptionally(effectiveCause);
                 } else {
@@ -614,7 +684,6 @@ public class VertxHttpRecorder {
             }
         });
         try {
-
             String deploymentId = futureResult.get();
             VertxCoreRecorder.setWebDeploymentId(deploymentId);
             closeTask = new Runnable() {
@@ -632,7 +701,7 @@ public class VertxHttpRecorder {
                                     }
                                 });
                             } catch (Exception e) {
-                                e.printStackTrace();
+                                LOGGER.warn("Failed to undeploy deployment ", e);
                             }
                             try {
                                 latch.await();
@@ -714,10 +783,22 @@ public class VertxHttpRecorder {
             certificates.add(certFile.get());
         }
 
+        // credentials provider
+        Map<String, String> credentials = Map.of();
+        if (sslConfig.certificate.credentialsProvider.isPresent()) {
+            String beanName = sslConfig.certificate.credentialsProviderName.orElse(null);
+            CredentialsProvider credentialsProvider = CredentialsProviderFinder.find(beanName);
+            String name = sslConfig.certificate.credentialsProvider.get();
+            credentials = credentialsProvider.getCredentials(name);
+        }
         final Optional<Path> keyStoreFile = sslConfig.certificate.keyStoreFile;
-        final String keystorePassword = sslConfig.certificate.keyStorePassword;
+        final Optional<String> keyStorePassword = getCredential(sslConfig.certificate.keyStorePassword, credentials,
+                sslConfig.certificate.keyStorePasswordKey);
+        final Optional<String> keyStoreKeyPassword = getCredential(sslConfig.certificate.keyStoreKeyPassword, credentials,
+                sslConfig.certificate.keyStoreKeyPasswordKey);
         final Optional<Path> trustStoreFile = sslConfig.certificate.trustStoreFile;
-        final Optional<String> trustStorePassword = sslConfig.certificate.trustStorePassword;
+        final Optional<String> trustStorePassword = getCredential(sslConfig.certificate.trustStorePassword, credentials,
+                sslConfig.certificate.trustStorePasswordKey);
         final HttpServerOptions serverOptions = new HttpServerOptions();
 
         //ssl
@@ -734,11 +815,11 @@ public class VertxHttpRecorder {
         } else if (keyStoreFile.isPresent()) {
             KeyStoreOptions options = createKeyStoreOptions(
                     keyStoreFile.get(),
-                    keystorePassword,
+                    keyStorePassword.orElse("password"),
                     sslConfig.certificate.keyStoreFileType,
                     sslConfig.certificate.keyStoreProvider,
                     sslConfig.certificate.keyStoreKeyAlias,
-                    sslConfig.certificate.keyStoreKeyPassword);
+                    keyStoreKeyPassword);
             serverOptions.setKeyCertOptions(options);
         } else {
             return null;
@@ -774,12 +855,27 @@ public class VertxHttpRecorder {
         serverOptions.setPort(sslPort == 0 ? -2 : sslPort);
         serverOptions.setClientAuth(buildTimeConfig.tlsClientAuth);
 
-        applyCommonOptions(serverOptions, httpConfiguration, websocketSubProtocols);
+        applyCommonOptions(serverOptions, buildTimeConfig, httpConfiguration, websocketSubProtocols);
 
         return serverOptions;
     }
 
-    private static void applyCommonOptions(HttpServerOptions httpServerOptions, HttpConfiguration httpConfiguration,
+    private static Optional<String> getCredential(Optional<String> password, Map<String, String> credentials,
+            Optional<String> passwordKey) {
+        if (password.isPresent()) {
+            return password;
+        }
+
+        if (passwordKey.isPresent()) {
+            return Optional.ofNullable(credentials.get(passwordKey.get()));
+        } else {
+            return Optional.empty();
+        }
+    }
+
+    private static void applyCommonOptions(HttpServerOptions httpServerOptions,
+            HttpBuildTimeConfig buildTimeConfig,
+            HttpConfiguration httpConfiguration,
             List<String> websocketSubProtocols) {
         httpServerOptions.setHost(httpConfiguration.host);
         setIdleTimeout(httpConfiguration, httpServerOptions);
@@ -792,12 +888,13 @@ public class VertxHttpRecorder {
         httpServerOptions.setTcpCork(httpConfiguration.tcpCork);
         httpServerOptions.setAcceptBacklog(httpConfiguration.acceptBacklog);
         httpServerOptions.setTcpFastOpen(httpConfiguration.tcpFastOpen);
-        httpServerOptions.setCompressionSupported(httpConfiguration.enableCompression);
-        if (httpConfiguration.compressionLevel.isPresent()) {
-            httpServerOptions.setCompressionLevel(httpConfiguration.compressionLevel.getAsInt());
+        httpServerOptions.setCompressionSupported(buildTimeConfig.enableCompression);
+        if (buildTimeConfig.compressionLevel.isPresent()) {
+            httpServerOptions.setCompressionLevel(buildTimeConfig.compressionLevel.getAsInt());
         }
-        httpServerOptions.setDecompressionSupported(httpConfiguration.enableDecompression);
+        httpServerOptions.setDecompressionSupported(buildTimeConfig.enableDecompression);
         httpServerOptions.setMaxInitialLineLength(httpConfiguration.limits.maxInitialLineLength);
+        httpServerOptions.setHandle100ContinueAutomatically(httpConfiguration.handle100ContinueAutomatically);
     }
 
     private static KeyStoreOptions createKeyStoreOptions(Path path, String password, Optional<String> fileType,
@@ -883,7 +980,8 @@ public class VertxHttpRecorder {
         return out.toByteArray();
     }
 
-    private static HttpServerOptions createHttpServerOptions(HttpConfiguration httpConfiguration,
+    private static HttpServerOptions createHttpServerOptions(
+            HttpBuildTimeConfig buildTimeConfig, HttpConfiguration httpConfiguration,
             LaunchMode launchMode, List<String> websocketSubProtocols) {
         if (!httpConfiguration.hostEnabled) {
             return null;
@@ -893,19 +991,31 @@ public class VertxHttpRecorder {
         int port = httpConfiguration.determinePort(launchMode);
         options.setPort(port == 0 ? -1 : port);
 
-        applyCommonOptions(options, httpConfiguration, websocketSubProtocols);
+        applyCommonOptions(options, buildTimeConfig, httpConfiguration, websocketSubProtocols);
 
         return options;
     }
 
-    private static HttpServerOptions createDomainSocketOptions(HttpConfiguration httpConfiguration,
+    private static HttpServerOptions createDomainSocketOptions(
+            HttpBuildTimeConfig buildTimeConfig, HttpConfiguration httpConfiguration,
             List<String> websocketSubProtocols) {
         if (!httpConfiguration.domainSocketEnabled) {
             return null;
         }
         HttpServerOptions options = new HttpServerOptions();
 
-        applyCommonOptions(options, httpConfiguration, websocketSubProtocols);
+        applyCommonOptions(options, buildTimeConfig, httpConfiguration, websocketSubProtocols);
+        // Override the host (0.0.0.0 by default) with the configured domain socket.
+        options.setHost(httpConfiguration.domainSocket);
+
+        // Check if we can write into the domain socket directory
+        // We can do this check using a blocking API as the execution is done from the main thread (not an I/O thread)
+        File file = new File(httpConfiguration.domainSocket);
+        if (!file.getParentFile().canWrite()) {
+            LOGGER.warnf(
+                    "Unable to write in the domain socket directory (`%s`). Binding to the socket is likely going to fail.",
+                    httpConfiguration.domainSocket);
+        }
 
         return options;
     }
@@ -914,14 +1024,6 @@ public class VertxHttpRecorder {
         int idleTimeout = (int) httpConfiguration.idleTimeout.toMillis();
         options.setIdleTimeout(idleTimeout);
         options.setIdleTimeoutUnit(TimeUnit.MILLISECONDS);
-    }
-
-    public void warnIfPortChanged(HttpConfiguration config, int port) {
-        if (config.port != port) {
-            LOGGER.errorf(
-                    "quarkus.http.port was specified at build time as %s however run time value is %s, Kubernetes metadata will be incorrect.",
-                    port, config.port);
-        }
     }
 
     public void addRoute(RuntimeValue<Router> router, Function<Router, Route> route, Handler<RoutingContext> handler,
@@ -968,7 +1070,7 @@ public class VertxHttpRecorder {
         return new GracefulShutdownFilter();
     }
 
-    private static class WebDeploymentVerticle extends AbstractVerticle {
+    private static class WebDeploymentVerticle extends AbstractVerticle implements Resource {
 
         private HttpServer httpServer;
         private HttpServer httpsServer;
@@ -994,6 +1096,7 @@ public class VertxHttpRecorder {
             this.insecureRequests = insecureRequests;
             this.quarkusConfig = quarkusConfig;
             this.connectionCount = connectionCount;
+            org.crac.Core.getGlobalContext().register(this);
         }
 
         @Override
@@ -1070,7 +1173,20 @@ public class VertxHttpRecorder {
                         startFuture.complete(null);
                     }
                 } else {
-                    startFuture.fail(event.cause());
+                    if (event.cause() != null && event.cause().getMessage() != null
+                            && event.cause().getMessage().contains("Permission denied")) {
+                        startFuture.fail(new IllegalStateException(
+                                String.format(
+                                        "Unable to bind to Unix domain socket (%s) as the application does not have the permission to write in the directory.",
+                                        domainSocketOptions.getHost())));
+                    } else if (event.cause() instanceof IllegalArgumentException) {
+                        startFuture.fail(new IllegalArgumentException(
+                                String.format(
+                                        "Unable to bind to Unix domain socket. Consider adding the 'io.netty:%s' dependency. See the Quarkus Vert.x reference guide for more details.",
+                                        Utils.isLinux() ? "netty-transport-native-epoll" : "netty-transport-native-kqueue")));
+                    } else {
+                        startFuture.fail(event.cause());
+                    }
                 }
             });
         }
@@ -1103,60 +1219,63 @@ public class VertxHttpRecorder {
                     }
                 });
             }
-            httpServer.listen(options.getPort(), options.getHost(), event -> {
-                if (event.cause() != null) {
-                    startFuture.fail(event.cause());
-                } else {
-                    // Port may be random, so set the actual port
-                    int actualPort = event.result().actualPort();
-
-                    if (https) {
-                        actualHttpsPort = actualPort;
+            httpServer.listen(options.getPort(), options.getHost(), new Handler<>() {
+                @Override
+                public void handle(AsyncResult<HttpServer> event) {
+                    if (event.cause() != null) {
+                        startFuture.fail(event.cause());
                     } else {
-                        actualHttpPort = actualPort;
-                    }
-                    if (remainingCount.decrementAndGet() == 0) {
-                        //make sure we only set the properties once
-                        if (actualPort != options.getPort()) {
-                            // Override quarkus.http(s)?.(test-)?port
-                            String schema;
-                            if (https) {
-                                clearHttpsProperty = true;
-                                schema = "https";
-                            } else {
-                                clearHttpProperty = true;
-                                actualHttpPort = actualPort;
-                                schema = "http";
-                            }
-                            portPropertiesToRestore = new HashMap<>();
-                            String portPropertyValue = String.valueOf(actualPort);
-                            //we always set the .port property, even if we are in test mode, so this will always
-                            //reflect the current port
-                            String portPropertyName = "quarkus." + schema + ".port";
-                            String prevPortPropertyValue = System.setProperty(portPropertyName, portPropertyValue);
-                            if (!Objects.equals(prevPortPropertyValue, portPropertyValue)) {
-                                portPropertiesToRestore.put(portPropertyName, prevPortPropertyValue);
-                            }
-                            if (launchMode == LaunchMode.TEST) {
-                                //we also set the test-port property in a test
-                                String testPropName = "quarkus." + schema + ".test-port";
-                                String prevTestPropPrevValue = System.setProperty(testPropName, portPropertyValue);
-                                if (!Objects.equals(prevTestPropPrevValue, portPropertyValue)) {
-                                    portPropertiesToRestore.put(testPropName, prevTestPropPrevValue);
+                        // Port may be random, so set the actual port
+                        int actualPort = event.result().actualPort();
+
+                        if (https) {
+                            actualHttpsPort = actualPort;
+                        } else {
+                            actualHttpPort = actualPort;
+                        }
+                        if (remainingCount.decrementAndGet() == 0) {
+                            //make sure we only set the properties once
+                            if (actualPort != options.getPort()) {
+                                // Override quarkus.http(s)?.(test-)?port
+                                String schema;
+                                if (https) {
+                                    clearHttpsProperty = true;
+                                    schema = "https";
+                                } else {
+                                    clearHttpProperty = true;
+                                    actualHttpPort = actualPort;
+                                    schema = "http";
                                 }
-                            }
-                            if (launchMode.isDevOrTest()) {
-                                // set the profile property as well to make sure we don't have any inconsistencies
-                                portPropertyName = propertyWithProfilePrefix(portPropertyName);
-                                prevPortPropertyValue = System.setProperty(portPropertyName, portPropertyValue);
+                                portPropertiesToRestore = new HashMap<>();
+                                String portPropertyValue = String.valueOf(actualPort);
+                                //we always set the .port property, even if we are in test mode, so this will always
+                                //reflect the current port
+                                String portPropertyName = "quarkus." + schema + ".port";
+                                String prevPortPropertyValue = System.setProperty(portPropertyName, portPropertyValue);
                                 if (!Objects.equals(prevPortPropertyValue, portPropertyValue)) {
                                     portPropertiesToRestore.put(portPropertyName, prevPortPropertyValue);
                                 }
+                                if (launchMode == LaunchMode.TEST) {
+                                    //we also set the test-port property in a test
+                                    String testPropName = "quarkus." + schema + ".test-port";
+                                    String prevTestPropPrevValue = System.setProperty(testPropName, portPropertyValue);
+                                    if (!Objects.equals(prevTestPropPrevValue, portPropertyValue)) {
+                                        portPropertiesToRestore.put(testPropName, prevTestPropPrevValue);
+                                    }
+                                }
+                                if (launchMode.isDevOrTest()) {
+                                    // set the profile property as well to make sure we don't have any inconsistencies
+                                    portPropertyName = propertyWithProfilePrefix(portPropertyName);
+                                    prevPortPropertyValue = System.setProperty(portPropertyName, portPropertyValue);
+                                    if (!Objects.equals(prevPortPropertyValue, portPropertyValue)) {
+                                        portPropertiesToRestore.put(portPropertyName, prevPortPropertyValue);
+                                    }
+                                }
                             }
+                            startFuture.complete(null);
                         }
-                        startFuture.complete(null);
-                    }
 
+                    }
                 }
             });
         }
@@ -1222,6 +1341,24 @@ public class VertxHttpRecorder {
 
         private String propertyWithProfilePrefix(String portPropertyName) {
             return "%" + launchMode.getDefaultProfile() + "." + portPropertyName;
+        }
+
+        @Override
+        public void beforeCheckpoint(org.crac.Context<? extends Resource> context) throws Exception {
+            Promise<Void> p = Promise.promise();
+            stop(p);
+            CountDownLatch latch = new CountDownLatch(1);
+            p.future().onComplete(event -> latch.countDown());
+            latch.await();
+        }
+
+        @Override
+        public void afterRestore(org.crac.Context<? extends Resource> context) throws Exception {
+            Promise<Void> p = Promise.promise();
+            start(p);
+            CountDownLatch latch = new CountDownLatch(1);
+            p.future().onComplete(event -> latch.countDown());
+            latch.await();
         }
     }
 
@@ -1375,7 +1512,7 @@ public class VertxHttpRecorder {
                 }
             };
             if (entry.getKey().equals(".*")) {
-                //bit of a hack to make sure the pattern .* is evaluated last
+                //a bit of a hack to make sure the pattern .* is evaluated last
                 last = biFunction;
             } else {
                 functions.add(biFunction);

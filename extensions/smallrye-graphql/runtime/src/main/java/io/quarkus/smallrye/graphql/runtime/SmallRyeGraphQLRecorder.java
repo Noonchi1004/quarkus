@@ -3,10 +3,9 @@ package io.quarkus.smallrye.graphql.runtime;
 import java.util.List;
 import java.util.function.Consumer;
 
-import javax.enterprise.inject.Instance;
-import javax.enterprise.inject.spi.CDI;
-
 import graphql.schema.GraphQLSchema;
+import io.quarkus.arc.Arc;
+import io.quarkus.arc.InstanceHandle;
 import io.quarkus.arc.runtime.BeanContainer;
 import io.quarkus.runtime.RuntimeValue;
 import io.quarkus.runtime.ShutdownContext;
@@ -33,18 +32,20 @@ public class SmallRyeGraphQLRecorder {
     }
 
     public Handler<RoutingContext> executionHandler(RuntimeValue<Boolean> initialized, boolean allowGet,
-            boolean allowPostWithQueryParameters) {
+            boolean allowPostWithQueryParameters, boolean runBlocking) {
         if (initialized.getValue()) {
-            return new SmallRyeGraphQLExecutionHandler(allowGet, allowPostWithQueryParameters, getCurrentIdentityAssociation(),
-                    CDI.current().select(CurrentVertxRequest.class).get());
+            return new SmallRyeGraphQLExecutionHandler(allowGet, allowPostWithQueryParameters, runBlocking,
+                    getCurrentIdentityAssociation(),
+                    Arc.container().instance(CurrentVertxRequest.class).get());
         } else {
             return new SmallRyeGraphQLNoEndpointHandler();
         }
     }
 
-    public Handler<RoutingContext> graphqlOverWebsocketHandler(BeanContainer beanContainer, RuntimeValue<Boolean> initialized) {
+    public Handler<RoutingContext> graphqlOverWebsocketHandler(BeanContainer beanContainer, RuntimeValue<Boolean> initialized,
+            boolean runBlocking) {
         return new SmallRyeGraphQLOverWebSocketHandler(getCurrentIdentityAssociation(),
-                CDI.current().select(CurrentVertxRequest.class).get());
+                Arc.container().instance(CurrentVertxRequest.class).get(), runBlocking);
     }
 
     public Handler<RoutingContext> schemaHandler(RuntimeValue<Boolean> initialized, boolean schemaAvailable) {
@@ -89,9 +90,9 @@ public class SmallRyeGraphQLRecorder {
     }
 
     private CurrentIdentityAssociation getCurrentIdentityAssociation() {
-        Instance<CurrentIdentityAssociation> identityAssociations = CDI.current()
-                .select(CurrentIdentityAssociation.class);
-        if (identityAssociations.isResolvable()) {
+        InstanceHandle<CurrentIdentityAssociation> identityAssociations = Arc.container()
+                .instance(CurrentIdentityAssociation.class);
+        if (identityAssociations.isAvailable()) {
             return identityAssociations.get();
         }
         return null;

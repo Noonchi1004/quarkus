@@ -283,7 +283,7 @@ public abstract class MongoOperations<QueryType, UpdateType> {
         MongoCollection collection = mongoCollection(firstEntity);
         ClientSession session = getSession(firstEntity);
 
-        //this will be an ordered bulk: it's less performant than a unordered one but will fail at the first failed write
+        //this will be an ordered bulk: it's less performant than an unordered one but will fail at the first failed write
         List<WriteModel> bulk = new ArrayList<>();
         for (Object entity : entities) {
             //we transform the entity as a document first
@@ -321,19 +321,20 @@ public abstract class MongoOperations<QueryType, UpdateType> {
     }
 
     ClientSession getSession(Class<?> entityClass) {
+        ClientSession clientSession = null;
         MongoEntity mongoEntity = entityClass.getAnnotation(MongoEntity.class);
         InstanceHandle<TransactionSynchronizationRegistry> instance = Arc.container()
                 .instance(TransactionSynchronizationRegistry.class);
         if (instance.isAvailable()) {
             TransactionSynchronizationRegistry registry = instance.get();
             if (registry.getTransactionStatus() == Status.STATUS_ACTIVE) {
-                ClientSession clientSession = (ClientSession) registry.getResource(SESSION_KEY);
+                clientSession = (ClientSession) registry.getResource(SESSION_KEY);
                 if (clientSession == null) {
                     return registerClientSession(mongoEntity, registry);
                 }
             }
         }
-        return null;
+        return clientSession;
     }
 
     private ClientSession registerClientSession(MongoEntity mongoEntity,
@@ -637,6 +638,9 @@ public abstract class MongoOperations<QueryType, UpdateType> {
         Document sortDoc = new Document();
         for (Sort.Column col : sort.getColumns()) {
             sortDoc.append(col.getName(), col.getDirection() == Sort.Direction.Ascending ? 1 : -1);
+            if (col.getNullPrecedence() != null) {
+                throw new UnsupportedOperationException("Cannot sort by nulls first or nulls last");
+            }
         }
         return sortDoc;
     }

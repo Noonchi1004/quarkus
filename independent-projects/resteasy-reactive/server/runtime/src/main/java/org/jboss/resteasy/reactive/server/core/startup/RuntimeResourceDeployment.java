@@ -1,14 +1,12 @@
 package org.jboss.resteasy.reactive.server.core.startup;
 
 import static org.jboss.resteasy.reactive.common.util.DeploymentUtils.loadClass;
+import static org.jboss.resteasy.reactive.common.util.types.Types.getEffectiveReturnType;
+import static org.jboss.resteasy.reactive.common.util.types.Types.getRawType;
 
-import io.smallrye.mutiny.Multi;
-import io.smallrye.mutiny.Uni;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
-import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
-import java.lang.reflect.WildcardType;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -19,7 +17,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
 import java.util.function.Supplier;
 import javax.ws.rs.RuntimeType;
@@ -28,7 +25,6 @@ import javax.ws.rs.core.MultivaluedMap;
 import javax.ws.rs.core.Response;
 import javax.ws.rs.ext.MessageBodyWriter;
 import org.jboss.logging.Logger;
-import org.jboss.resteasy.reactive.RestResponse;
 import org.jboss.resteasy.reactive.common.ResteasyReactiveConfig;
 import org.jboss.resteasy.reactive.common.model.MethodParameter;
 import org.jboss.resteasy.reactive.common.model.ParameterType;
@@ -104,6 +100,7 @@ public class RuntimeResourceDeployment {
     private final ServerSerialisers serialisers;
     private final ResteasyReactiveConfig resteasyReactiveConfig;
     private final Supplier<Executor> executorSupplier;
+    private final Supplier<Executor> virtualExecutorSupplier;
     private final RuntimeInterceptorDeployment runtimeInterceptorDeployment;
     private final DynamicEntityWriter dynamicEntityWriter;
     private final ResourceLocatorHandler resourceLocatorHandler;
@@ -112,26 +109,30 @@ public class RuntimeResourceDeployment {
      */
     private final boolean defaultBlocking;
     private final BlockingHandler blockingHandler;
+    private final BlockingHandler blockingHandlerVirtualThread;
     private final ResponseWriterHandler responseWriterHandler;
 
     public RuntimeResourceDeployment(DeploymentInfo info, Supplier<Executor> executorSupplier,
+            Supplier<Executor> virtualExecutorSupplier,
             RuntimeInterceptorDeployment runtimeInterceptorDeployment, DynamicEntityWriter dynamicEntityWriter,
             ResourceLocatorHandler resourceLocatorHandler, boolean defaultBlocking) {
         this.info = info;
         this.serialisers = info.getSerialisers();
         this.resteasyReactiveConfig = info.getResteasyReactiveConfig();
         this.executorSupplier = executorSupplier;
+        this.virtualExecutorSupplier = virtualExecutorSupplier;
         this.runtimeInterceptorDeployment = runtimeInterceptorDeployment;
         this.dynamicEntityWriter = dynamicEntityWriter;
         this.resourceLocatorHandler = resourceLocatorHandler;
         this.defaultBlocking = defaultBlocking;
         this.blockingHandler = new BlockingHandler(executorSupplier);
+        this.blockingHandlerVirtualThread = new BlockingHandler(virtualExecutorSupplier);
         this.responseWriterHandler = new ResponseWriterHandler(dynamicEntityWriter);
     }
 
     public RuntimeResource buildResourceMethod(ResourceClass clazz,
             ServerResourceMethod method, boolean locatableResource, URITemplate classPathTemplate, DeploymentInfo info) {
-        URITemplate methodPathTemplate = new URITemplate(method.getPath(), false);
+        URITemplate methodPathTemplate = new URITemplate(method.getPath(), method.isResourceLocator());
         MultivaluedMap<ScoreSystem.Category, ScoreSystem.Diagnostic> score = new QuarkusMultivaluedHashMap<>();
 
         Map<String, Integer> pathParameterIndexes = buildParamIndexMap(classPathTemplate, methodPathTemplate);
@@ -175,7 +176,8 @@ public class RuntimeResourceDeployment {
         }
 
         ResteasyReactiveResourceInfo lazyMethod = new ResteasyReactiveResourceInfo(method.getName(), resourceClass,
-                parameterDeclaredUnresolvedTypes, classAnnotationNames, method.getMethodAnnotationNames());
+                parameterDeclaredUnresolvedTypes, classAnnotationNames, method.getMethodAnnotationNames(),
+                !defaultBlocking && !method.isBlocking());
 
         RuntimeInterceptorDeployment.MethodInterceptorContext interceptorDeployment = runtimeInterceptorDeployment
                 .forMethod(method, lazyMethod);
@@ -201,11 +203,22 @@ public class RuntimeResourceDeployment {
         Optional<Integer> blockingHandlerIndex = Optional.empty();
         if (!defaultBlocking) {
             if (method.isBlocking()) {
-                handlers.add(blockingHandler);
+                if (method.isRunOnVirtualThread()) {
+                    handlers.add(blockingHandlerVirtualThread);
+                } else {
+                    handlers.add(blockingHandler);
+                }
                 blockingHandlerIndex = Optional.of(handlers.size() - 1);
                 score.add(ScoreSystem.Category.Execution, ScoreSystem.Diagnostic.ExecutionBlocking);
             } else {
-                handlers.add(NonBlockingHandler.INSTANCE);
+                if (method.isRunOnVirtualThread()) {
+                    //should not happen
+                    log.error("a method was both non blocking and @RunOnVirtualThread, it is now considered " +
+                            "@RunOnVirtual and blocking");
+                    handlers.add(blockingHandlerVirtualThread);
+                } else {
+                    handlers.add(NonBlockingHandler.INSTANCE);
+                }
                 score.add(ScoreSystem.Category.Execution, ScoreSystem.Diagnostic.ExecutionNonBlocking);
             }
         }
@@ -354,7 +367,9 @@ public class RuntimeResourceDeployment {
         }
         boolean afterMethodInvokeHandlersAdded = addHandlers(handlers, clazz, method, info,
                 HandlerChainCustomizer.Phase.AFTER_METHOD_INVOKE);
-        if (afterMethodInvokeHandlersAdded) {
+        boolean afterMethodInvokeHandlersSecondRoundAdded = addHandlers(handlers, clazz, method, info,
+                HandlerChainCustomizer.Phase.AFTER_METHOD_INVOKE_SECOND_ROUND);
+        if (afterMethodInvokeHandlersAdded || afterMethodInvokeHandlersSecondRoundAdded) {
             addStreamingResponseCustomizers(method, handlers);
         }
 
@@ -367,7 +382,7 @@ public class RuntimeResourceDeployment {
             // when negotiating a media type, we want to use the proper subtype to locate a ResourceWriter,
             // hence the 'true' for 'useSuffix'
             serverMediaType = new ServerMediaType(ServerMediaType.mediaTypesFromArray(method.getProduces()),
-                    StandardCharsets.UTF_8.name(), false, true);
+                    StandardCharsets.UTF_8.name(), false);
         }
         if (method.getHttpMethod() == null) {
             //this is a resource locator method
@@ -387,8 +402,7 @@ public class RuntimeResourceDeployment {
                     } else if (rawEffectiveReturnType != Void.class
                             && rawEffectiveReturnType != void.class) {
                         List<MessageBodyWriter<?>> buildTimeWriters = serialisers.findBuildTimeWriters(rawEffectiveReturnType,
-                                RuntimeType.SERVER, Collections.singletonList(
-                                        MediaTypeHelper.withSuffixAsSubtype(MediaType.valueOf(method.getProduces()[0]))));
+                                RuntimeType.SERVER, MediaTypeHelper.toListOfMediaType(method.getProduces()));
                         if (buildTimeWriters == null) {
                             //if this is null this means that the type cannot be resolved at build time
                             //this happens when the method returns a generic type (e.g. Object), so there
@@ -466,7 +480,7 @@ public class RuntimeResourceDeployment {
                 method.getProduces() == null ? null : serverMediaType,
                 consumesMediaTypes, invoker,
                 clazz.getFactory(), handlers.toArray(EMPTY_REST_HANDLER_ARRAY), method.getName(), parameterDeclaredTypes,
-                effectiveReturnType, method.isBlocking(), resourceClass,
+                effectiveReturnType, method.isBlocking(), method.isRunOnVirtualThread(), resourceClass,
                 lazyMethod,
                 pathParameterIndexes, info.isDevelopmentMode() ? score : null, streamElementType,
                 clazz.resourceExceptionMapper());
@@ -615,45 +629,6 @@ public class RuntimeResourceDeployment {
             }
         }
         return pathParameterIndexes;
-    }
-
-    private Class<?> getRawType(Type type) {
-        if (type instanceof Class)
-            return (Class<?>) type;
-        if (type instanceof ParameterizedType) {
-            ParameterizedType ptype = (ParameterizedType) type;
-            return (Class<?>) ptype.getRawType();
-        }
-        throw new UnsupportedOperationException("Endpoint return type not supported yet: " + type);
-    }
-
-    private Type getEffectiveReturnType(Type returnType) {
-        if (returnType instanceof Class)
-            return returnType;
-        if (returnType instanceof ParameterizedType) {
-            ParameterizedType type = (ParameterizedType) returnType;
-            Type firstTypeArgument = type.getActualTypeArguments()[0];
-            if (type.getRawType() == CompletionStage.class) {
-                return getEffectiveReturnType(firstTypeArgument);
-            }
-            if (type.getRawType() == Uni.class) {
-                return getEffectiveReturnType(firstTypeArgument);
-            }
-            if (type.getRawType() == Multi.class) {
-                return getEffectiveReturnType(firstTypeArgument);
-            }
-            if (type.getRawType() == RestResponse.class) {
-                return getEffectiveReturnType(firstTypeArgument);
-            }
-            return returnType;
-        }
-        if (returnType instanceof WildcardType) {
-            Type[] bounds = ((WildcardType) returnType).getLowerBounds();
-            if (bounds.length > 0)
-                return getRawType(bounds[0]);
-            return getRawType(((WildcardType) returnType).getUpperBounds()[0]);
-        }
-        throw new UnsupportedOperationException("Endpoint return type not supported yet: " + returnType);
     }
 
 }

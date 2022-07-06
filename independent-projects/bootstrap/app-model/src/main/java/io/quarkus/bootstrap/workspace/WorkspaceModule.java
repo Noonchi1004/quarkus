@@ -55,6 +55,10 @@ public interface WorkspaceModule {
 
     Collection<Dependency> getDirectDependencies();
 
+    Collection<String> getTestClasspathDependencyExclusions();
+
+    Collection<String> getAdditionalTestClasspathElements();
+
     Mutable mutable();
 
     interface Mutable extends WorkspaceModule {
@@ -77,7 +81,9 @@ public interface WorkspaceModule {
 
         Mutable addArtifactSources(ArtifactSources sources);
 
-        boolean hasNonTestSources();
+        Mutable setTestClasspathDependencyExclusions(Collection<String> excludes);
+
+        Mutable setAdditionalTestClasspathElements(Collection<String> elements);
 
         WorkspaceModule build();
 

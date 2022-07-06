@@ -40,6 +40,7 @@ import io.quarkus.vertx.core.runtime.config.AddressResolverConfiguration;
 import io.quarkus.vertx.core.runtime.config.ClusterConfiguration;
 import io.quarkus.vertx.core.runtime.config.EventBusConfiguration;
 import io.quarkus.vertx.core.runtime.config.VertxConfiguration;
+import io.quarkus.vertx.mdc.provider.LateBoundMDCProvider;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Context;
 import io.vertx.core.Handler;
@@ -242,11 +243,14 @@ public class VertxCoreRecorder {
                 LOGGER.error("Uncaught exception received by Vert.x", error);
             }
         });
+
+        LateBoundMDCProvider.setMDCProviderDelegate(VertxMDC.INSTANCE);
+
         return logVertxInitialization(vertx);
     }
 
     /**
-     * Depending on the launch mode we may need do handle the TCCL differently.
+     * Depending on the launch mode we may need to handle the TCCL differently.
      *
      * For dev mode it can change, so we don't want to capture the original TCCL (as this would be a leak). For other modes we
      * just want a fixed TCCL, and leaks are not an issue.
@@ -308,7 +312,7 @@ public class VertxCoreRecorder {
                 }
                 String os = System.getProperty("os.name").toLowerCase(Locale.ENGLISH);
                 if (!os.contains("windows")) {
-                    // Do not execute the following on windows.
+                    // Do not execute the following on Windows.
                     if (!(tmp.setReadable(true, false) && tmp.setWritable(true, false))) {
                         LOGGER.warnf("Unable to make the Vert.x cache directory (%s) world readable and writable",
                                 tmp.getAbsolutePath());
@@ -372,7 +376,7 @@ public class VertxCoreRecorder {
 
     private static int calculateDefaultIOThreads() {
         //we only allow one event loop per 10mb of ram at the most
-        //its hard to say what this number should be, but it is also obvious
+        //it's hard to say what this number should be, but it is also obvious
         //that for constrained environments we don't want a lot of event loops
         //lets start with 10mb and adjust as needed
         int recommended = ProcessorInfo.availableProcessors() * 2;
@@ -421,7 +425,9 @@ public class VertxCoreRecorder {
         if (cluster.port.isPresent()) {
             options.getEventBusOptions().setPort(cluster.port.getAsInt());
         }
-        cluster.publicHost.ifPresent(options.getEventBusOptions()::setClusterPublicHost);
+        if (cluster.publicHost.isPresent()) {
+            options.getEventBusOptions().setClusterPublicHost(cluster.publicHost.get());
+        }
         if (cluster.publicPort.isPresent()) {
             options.getEventBusOptions().setPort(cluster.publicPort.getAsInt());
         }
@@ -510,11 +516,14 @@ public class VertxCoreRecorder {
     public ThreadFactory createThreadFactory(LaunchMode launchMode) {
         Optional<ClassLoader> nonDevModeTccl = setupThreadFactoryTccl(launchMode);
         AtomicInteger threadCount = new AtomicInteger(0);
-        return runnable -> {
-            VertxThread thread = createVertxThread(runnable,
-                    "executor-thread-" + threadCount.getAndIncrement(), true, 0, null, launchMode, nonDevModeTccl);
-            thread.setDaemon(true);
-            return thread;
+        return new ThreadFactory() {
+            @Override
+            public Thread newThread(Runnable runnable) {
+                VertxThread thread = createVertxThread(runnable,
+                        "executor-thread-" + threadCount.getAndIncrement(), true, 0, null, launchMode, nonDevModeTccl);
+                thread.setDaemon(true);
+                return thread;
+            }
         };
     }
 
@@ -537,14 +546,15 @@ public class VertxCoreRecorder {
 
             @Override
             public void runWith(Runnable task, Object context) {
-                if (context != null) {
-                    // Only do context handling if it's non null
+                ContextInternal currentContext = (ContextInternal) Vertx.currentContext();
+                if (context != null && context != currentContext) {
+                    // Only do context handling if it's non-null
                     final ContextInternal vertxContext = (ContextInternal) context;
                     vertxContext.beginDispatch();
                     try {
                         task.run();
                     } finally {
-                        vertxContext.endDispatch(null);
+                        vertxContext.endDispatch(currentContext);
                     }
                 } else {
                     task.run();

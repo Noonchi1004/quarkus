@@ -2,12 +2,14 @@ package org.jboss.resteasy.reactive.common.processor;
 
 import io.smallrye.common.annotation.Blocking;
 import io.smallrye.common.annotation.NonBlocking;
+import io.smallrye.common.annotation.RunOnVirtualThread;
 import io.smallrye.mutiny.Multi;
 import io.smallrye.mutiny.Uni;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -169,6 +171,7 @@ public final class ResteasyReactiveDotNames {
     public static final DotName INVOCATION_CALLBACK = DotName.createSimple(InvocationCallback.class.getName());
 
     public static final DotName BLOCKING = DotName.createSimple(Blocking.class.getName());
+    public static final DotName RUN_ON_VIRTUAL_THREAD = DotName.createSimple(RunOnVirtualThread.class.getName());
     public static final DotName NON_BLOCKING = DotName.createSimple(NonBlocking.class.getName());
     public static final DotName SUSPENDED = DotName.createSimple(Suspended.class.getName());
     public static final DotName PRE_MATCHING = DotName.createSimple(PreMatching.class.getName());
@@ -182,6 +185,7 @@ public final class ResteasyReactiveDotNames {
     public static final DotName DUMMY_ELEMENT_TYPE = DotName.createSimple(DummyElementType.class.getName());
     public static final DotName MULTI_VALUED_MAP = DotName.createSimple(MultivaluedMap.class.getName());
     public static final DotName PATH_SEGMENT = DotName.createSimple(PathSegment.class.getName());
+    public static final DotName INSTANT = DotName.createSimple(Instant.class.getName());
     public static final DotName LOCAL_DATE = DotName.createSimple(LocalDate.class.getName());
     public static final DotName LOCAL_DATE_TIME = DotName.createSimple(LocalDateTime.class.getName());
     public static final DotName LOCAL_TIME = DotName.createSimple(LocalTime.class.getName());

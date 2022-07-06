@@ -24,6 +24,7 @@ import io.opentelemetry.instrumentation.api.instrumenter.Instrumenter;
 import io.opentelemetry.instrumentation.api.instrumenter.InstrumenterBuilder;
 import io.opentelemetry.instrumentation.api.instrumenter.net.InetSocketAddressNetServerAttributesGetter;
 import io.opentelemetry.instrumentation.api.instrumenter.net.NetServerAttributesExtractor;
+import io.opentelemetry.instrumentation.api.instrumenter.rpc.RpcServerAttributesExtractor;
 import io.opentelemetry.semconv.trace.attributes.SemanticAttributes;
 import io.quarkus.grpc.GlobalInterceptor;
 
@@ -38,7 +39,7 @@ public class GrpcTracingServerInterceptor implements ServerInterceptor {
                 INSTRUMENTATION_NAME,
                 new GrpcSpanNameExtractor());
 
-        builder.addAttributesExtractor(new GrpcAttributesExtractor())
+        builder.addAttributesExtractor(RpcServerAttributesExtractor.create(GrpcAttributesGetter.INSTANCE))
                 .addAttributesExtractor(NetServerAttributesExtractor.create(new GrpcServerNetServerAttributesGetter()))
                 .addAttributesExtractor(new GrpcStatusCodeExtractor())
                 .setSpanStatusExtractor(new GrpcSpanStatusExtractor());
@@ -52,22 +53,16 @@ public class GrpcTracingServerInterceptor implements ServerInterceptor {
 
         GrpcRequest grpcRequest = GrpcRequest.server(call.getMethodDescriptor(), headers, call.getAttributes());
         Context parentContext = Context.current();
-        Context spanContext = null;
-        Scope scope = null;
         boolean shouldStart = instrumenter.shouldStart(parentContext, grpcRequest);
         if (shouldStart) {
-            spanContext = instrumenter.start(parentContext, grpcRequest);
-            scope = spanContext.makeCurrent();
-        }
-
-        try {
-            TracingServerCall<ReqT, RespT> tracingServerCall = new TracingServerCall<>(call, spanContext, grpcRequest);
-            return new TracingServerCallListener<>(next.startCall(tracingServerCall, headers), spanContext, grpcRequest);
-        } finally {
-            if (scope != null) {
-                scope.close();
+            Context spanContext = instrumenter.start(parentContext, grpcRequest);
+            try (Scope ignored = spanContext.makeCurrent()) {
+                TracingServerCall<ReqT, RespT> tracingServerCall = new TracingServerCall<>(call, spanContext, grpcRequest);
+                return new TracingServerCallListener<>(next.startCall(tracingServerCall, headers), spanContext, grpcRequest);
             }
         }
+
+        return next.startCall(call, headers);
     }
 
     private static class GrpcServerNetServerAttributesGetter extends InetSocketAddressNetServerAttributesGetter<GrpcRequest> {
@@ -115,7 +110,7 @@ public class GrpcTracingServerInterceptor implements ServerInterceptor {
 
         @Override
         public void onHalfClose() {
-            try {
+            try (Scope ignored = spanContext.makeCurrent()) {
                 super.onHalfClose();
             } catch (Exception e) {
                 instrumenter.end(spanContext, grpcRequest, null, e);
@@ -125,18 +120,18 @@ public class GrpcTracingServerInterceptor implements ServerInterceptor {
 
         @Override
         public void onCancel() {
-            try {
+            try (Scope ignored = spanContext.makeCurrent()) {
                 super.onCancel();
+                instrumenter.end(spanContext, grpcRequest, Status.CANCELLED, null);
             } catch (Exception e) {
                 instrumenter.end(spanContext, grpcRequest, null, e);
                 throw e;
             }
-            instrumenter.end(spanContext, grpcRequest, Status.CANCELLED, null);
         }
 
         @Override
         public void onComplete() {
-            try {
+            try (Scope ignored = spanContext.makeCurrent()) {
                 super.onComplete();
             } catch (Exception e) {
                 instrumenter.end(spanContext, grpcRequest, null, e);
@@ -146,7 +141,7 @@ public class GrpcTracingServerInterceptor implements ServerInterceptor {
 
         @Override
         public void onReady() {
-            try {
+            try (Scope ignored = spanContext.makeCurrent()) {
                 super.onReady();
             } catch (Exception e) {
                 instrumenter.end(spanContext, grpcRequest, null, e);

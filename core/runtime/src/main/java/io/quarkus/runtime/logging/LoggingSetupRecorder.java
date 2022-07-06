@@ -33,7 +33,6 @@ import org.jboss.logmanager.formatters.PatternFormatter;
 import org.jboss.logmanager.handlers.AsyncHandler;
 import org.jboss.logmanager.handlers.ConsoleHandler;
 import org.jboss.logmanager.handlers.FileHandler;
-import org.jboss.logmanager.handlers.PeriodicRotatingFileHandler;
 import org.jboss.logmanager.handlers.PeriodicSizeRotatingFileHandler;
 import org.jboss.logmanager.handlers.SizeRotatingFileHandler;
 import org.jboss.logmanager.handlers.SyslogHandler;
@@ -74,18 +73,23 @@ public class LoggingSetupRecorder {
         ConfigInstantiator.handleObject(buildConfig);
         ConsoleRuntimeConfig consoleRuntimeConfig = new ConsoleRuntimeConfig();
         ConfigInstantiator.handleObject(consoleRuntimeConfig);
-        new LoggingSetupRecorder(new RuntimeValue<>(consoleRuntimeConfig)).initializeLogging(config, buildConfig, false, null,
+        new LoggingSetupRecorder(new RuntimeValue<>(consoleRuntimeConfig)).initializeLogging(config, buildConfig,
+                Collections.emptyMap(),
+                false, null,
+                Collections.emptyList(),
                 Collections.emptyList(),
                 Collections.emptyList(),
                 Collections.emptyList(), banner, LaunchMode.DEVELOPMENT);
     }
 
     public void initializeLogging(LogConfig config, LogBuildTimeConfig buildConfig,
+            final Map<String, InheritableLevel> categoryDefaultMinLevels,
             final boolean enableWebStream,
             final RuntimeValue<Optional<Handler>> devUiConsoleHandler,
             final List<RuntimeValue<Optional<Handler>>> additionalHandlers,
             final List<RuntimeValue<Map<String, Handler>>> additionalNamedHandlers,
-            final List<RuntimeValue<Optional<Formatter>>> possibleFormatters,
+            final List<RuntimeValue<Optional<Formatter>>> possibleConsoleFormatters,
+            final List<RuntimeValue<Optional<Formatter>>> possibleFileFormatters,
             final RuntimeValue<Optional<Supplier<String>>> possibleBannerSupplier, LaunchMode launchMode) {
 
         final Map<String, CategoryConfig> categories = config.categories;
@@ -126,7 +130,7 @@ public class LoggingSetupRecorder {
         if (config.console.enable) {
             final Handler consoleHandler = configureConsoleHandler(config.console, consoleRuntimeConfig.getValue(),
                     errorManager, cleanupFiler,
-                    possibleFormatters, possibleBannerSupplier, launchMode);
+                    possibleConsoleFormatters, possibleBannerSupplier, launchMode);
             errorManager = consoleHandler.getErrorManager();
             handlers.add(consoleHandler);
         }
@@ -150,7 +154,7 @@ public class LoggingSetupRecorder {
         }
 
         if (config.file.enable) {
-            handlers.add(configureFileHandler(config.file, errorManager, cleanupFiler));
+            handlers.add(configureFileHandler(config.file, errorManager, cleanupFiler, possibleFileFormatters));
         }
 
         if (config.syslog.enable) {
@@ -178,7 +182,7 @@ public class LoggingSetupRecorder {
 
         if (!categories.isEmpty()) {
             Map<String, Handler> namedHandlers = createNamedHandlers(config, consoleRuntimeConfig.getValue(),
-                    possibleFormatters, errorManager,
+                    possibleConsoleFormatters, possibleFileFormatters, errorManager,
                     cleanupFiler, launchMode);
 
             Map<String, Handler> additionalNamedHandlersMap;
@@ -198,9 +202,9 @@ public class LoggingSetupRecorder {
                 @Override
                 public void accept(String categoryName, CategoryConfig config) {
                     final Level logLevel = getLogLevel(categoryName, categories, CategoryConfig::getLevel,
-                            buildConfig.minLevel);
+                            Collections.emptyMap(), buildConfig.minLevel);
                     final Level minLogLevel = getLogLevel(categoryName, buildConfig.categories,
-                            CategoryBuildTimeConfig::getMinLevel, buildConfig.minLevel);
+                            CategoryBuildTimeConfig::getMinLevel, categoryDefaultMinLevels, buildConfig.minLevel);
 
                     if (logLevel.intValue() < minLogLevel.intValue()) {
                         log.warnf("Log level %s for category '%s' set below minimum logging level %s, promoting it to %s",
@@ -229,7 +233,9 @@ public class LoggingSetupRecorder {
     }
 
     public static void initializeBuildTimeLogging(LogConfig config, LogBuildTimeConfig buildConfig,
-            ConsoleRuntimeConfig consoleConfig, LaunchMode launchMode) {
+            Map<String, InheritableLevel> categoryDefaultMinLevels,
+            ConsoleRuntimeConfig consoleConfig, List<RuntimeValue<Optional<Formatter>>> possibleFileFormatters,
+            LaunchMode launchMode) {
 
         final Map<String, CategoryConfig> categories = config.categories;
         final LogContext logContext = LogContext.getLogContext();
@@ -256,14 +262,15 @@ public class LoggingSetupRecorder {
             handlers.add(consoleHandler);
         }
 
-        Map<String, Handler> namedHandlers = createNamedHandlers(config, consoleConfig, Collections.emptyList(), errorManager,
-                logCleanupFilter, launchMode);
+        Map<String, Handler> namedHandlers = createNamedHandlers(config, consoleConfig, Collections.emptyList(),
+                possibleFileFormatters, errorManager, logCleanupFilter, launchMode);
 
         for (Map.Entry<String, CategoryConfig> entry : categories.entrySet()) {
             final String categoryName = entry.getKey();
-            final Level logLevel = getLogLevel(categoryName, categories, CategoryConfig::getLevel, buildConfig.minLevel);
+            final Level logLevel = getLogLevel(categoryName, categories, CategoryConfig::getLevel,
+                    Collections.emptyMap(), buildConfig.minLevel);
             final Level minLogLevel = getLogLevel(categoryName, buildConfig.categories, CategoryBuildTimeConfig::getMinLevel,
-                    buildConfig.minLevel);
+                    categoryDefaultMinLevels, buildConfig.minLevel);
 
             if (logLevel.intValue() < minLogLevel.intValue()) {
                 log.warnf("Log level %s for category '%s' set below minimum logging level %s, promoting it to %s", logLevel,
@@ -290,14 +297,12 @@ public class LoggingSetupRecorder {
     }
 
     public static <T> Level getLogLevel(String categoryName, Map<String, T> categories,
-            Function<T, InheritableLevel> levelExtractor, Level rootMinLevel) {
+            Function<T, InheritableLevel> levelExtractor, Map<String, InheritableLevel> categoryDefaults, Level rootMinLevel) {
         while (true) {
-            T categoryConfig = categories.get(categoryName);
-            if (categoryConfig != null) {
-                final InheritableLevel inheritableLevel = levelExtractor.apply(categoryConfig);
-                if (inheritableLevel != null && !inheritableLevel.isInherited()) {
-                    return inheritableLevel.getLevel();
-                }
+            InheritableLevel inheritableLevel = getLogLevelNoInheritance(categoryName, categories, levelExtractor,
+                    categoryDefaults);
+            if (!inheritableLevel.isInherited()) {
+                return inheritableLevel.getLevel();
             }
             final int lastDotIndex = categoryName.lastIndexOf('.');
             if (lastDotIndex == -1) {
@@ -307,8 +312,26 @@ public class LoggingSetupRecorder {
         }
     }
 
+    public static <T> InheritableLevel getLogLevelNoInheritance(String categoryName, Map<String, T> categories,
+            Function<T, InheritableLevel> levelExtractor, Map<String, InheritableLevel> categoryDefaults) {
+        T categoryConfig = categories.get(categoryName);
+        InheritableLevel inheritableLevel = null;
+        if (categoryConfig != null) {
+            inheritableLevel = levelExtractor.apply(categoryConfig);
+        }
+        if (inheritableLevel == null) {
+            inheritableLevel = categoryDefaults.get(categoryName);
+        }
+        if (inheritableLevel == null) {
+            inheritableLevel = InheritableLevel.Inherited.INSTANCE;
+        }
+        return inheritableLevel;
+    }
+
     private static Map<String, Handler> createNamedHandlers(LogConfig config, ConsoleRuntimeConfig consoleRuntimeConfig,
-            List<RuntimeValue<Optional<Formatter>>> possibleFormatters, ErrorManager errorManager,
+            List<RuntimeValue<Optional<Formatter>>> possibleConsoleFormatters,
+            List<RuntimeValue<Optional<Formatter>>> possibleFileFormatters,
+            ErrorManager errorManager,
             LogCleanupFilter cleanupFilter, LaunchMode launchMode) {
         Map<String, Handler> namedHandlers = new HashMap<>();
         for (Entry<String, ConsoleConfig> consoleConfigEntry : config.consoleHandlers.entrySet()) {
@@ -318,7 +341,7 @@ public class LoggingSetupRecorder {
             }
             final Handler consoleHandler = configureConsoleHandler(namedConsoleConfig, consoleRuntimeConfig, errorManager,
                     cleanupFilter,
-                    possibleFormatters, null, launchMode);
+                    possibleConsoleFormatters, null, launchMode);
             addToNamedHandlers(namedHandlers, consoleHandler, consoleConfigEntry.getKey());
         }
         for (Entry<String, FileConfig> fileConfigEntry : config.fileHandlers.entrySet()) {
@@ -326,7 +349,8 @@ public class LoggingSetupRecorder {
             if (!namedFileConfig.enable) {
                 continue;
             }
-            final Handler fileHandler = configureFileHandler(namedFileConfig, errorManager, cleanupFilter);
+            final Handler fileHandler = configureFileHandler(namedFileConfig, errorManager, cleanupFilter,
+                    possibleFileFormatters);
             addToNamedHandlers(namedHandlers, fileHandler, fileConfigEntry.getKey());
         }
         for (Entry<String, SyslogConfig> sysLogConfigEntry : config.syslogHandlers.entrySet()) {
@@ -462,38 +486,46 @@ public class LoggingSetupRecorder {
         }
 
         if (formatterWarning) {
-            handler.getErrorManager().error("Multiple formatters were activated", null, ErrorManager.GENERIC_FAILURE);
+            handler.getErrorManager().error("Multiple console formatters were activated", null, ErrorManager.GENERIC_FAILURE);
         }
 
         return handler;
     }
 
     private static Handler configureFileHandler(final FileConfig config, final ErrorManager errorManager,
-            final LogCleanupFilter cleanupFilter) {
-        FileHandler handler = new FileHandler();
+            final LogCleanupFilter cleanupFilter, final List<RuntimeValue<Optional<Formatter>>> possibleFileFormatters) {
+        FileHandler handler;
         FileConfig.RotationConfig rotationConfig = config.rotation;
-        if ((rotationConfig.maxFileSize.isPresent() || rotationConfig.rotateOnBoot)
-                && rotationConfig.fileSuffix.isPresent()) {
+        if (rotationConfig.fileSuffix.isPresent()) {
             PeriodicSizeRotatingFileHandler periodicSizeRotatingFileHandler = new PeriodicSizeRotatingFileHandler();
             periodicSizeRotatingFileHandler.setSuffix(rotationConfig.fileSuffix.get());
-            rotationConfig.maxFileSize
-                    .ifPresent(memorySize -> periodicSizeRotatingFileHandler.setRotateSize(memorySize.asLongValue()));
+            periodicSizeRotatingFileHandler.setRotateSize(rotationConfig.maxFileSize.asLongValue());
             periodicSizeRotatingFileHandler.setRotateOnBoot(rotationConfig.rotateOnBoot);
             periodicSizeRotatingFileHandler.setMaxBackupIndex(rotationConfig.maxBackupIndex);
             handler = periodicSizeRotatingFileHandler;
-        } else if (rotationConfig.maxFileSize.isPresent()) {
+        } else {
             SizeRotatingFileHandler sizeRotatingFileHandler = new SizeRotatingFileHandler(
-                    rotationConfig.maxFileSize.get().asLongValue(), rotationConfig.maxBackupIndex);
+                    rotationConfig.maxFileSize.asLongValue(), rotationConfig.maxBackupIndex);
             sizeRotatingFileHandler.setRotateOnBoot(rotationConfig.rotateOnBoot);
             handler = sizeRotatingFileHandler;
-        } else if (rotationConfig.fileSuffix.isPresent()) {
-            PeriodicRotatingFileHandler periodicRotatingFileHandler = new PeriodicRotatingFileHandler();
-            periodicRotatingFileHandler.setSuffix(rotationConfig.fileSuffix.get());
-            handler = periodicRotatingFileHandler;
         }
 
-        final PatternFormatter formatter = new PatternFormatter(config.format);
+        Formatter formatter = null;
+        boolean formatterWarning = false;
+        for (RuntimeValue<Optional<Formatter>> value : possibleFileFormatters) {
+            if (formatter != null) {
+                formatterWarning = true;
+            }
+            final Optional<Formatter> val = value.getValue();
+            if (val.isPresent()) {
+                formatter = val.get();
+            }
+        }
+        if (formatter == null) {
+            formatter = new PatternFormatter(config.format);
+        }
         handler.setFormatter(formatter);
+
         handler.setAppend(true);
         try {
             handler.setFile(config.path);
@@ -503,6 +535,11 @@ public class LoggingSetupRecorder {
         handler.setErrorManager(errorManager);
         handler.setLevel(config.level);
         handler.setFilter(cleanupFilter);
+
+        if (formatterWarning) {
+            handler.getErrorManager().error("Multiple file formatters were activated", null, ErrorManager.GENERIC_FAILURE);
+        }
+
         if (config.async.enable) {
             return createAsyncHandler(config.async, config.level, handler);
         }

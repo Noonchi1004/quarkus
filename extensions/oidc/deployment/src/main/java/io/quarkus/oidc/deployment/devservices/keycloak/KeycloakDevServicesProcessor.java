@@ -14,6 +14,7 @@ import java.nio.file.Paths;
 import java.nio.file.attribute.FileTime;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -24,6 +25,7 @@ import java.util.OptionalInt;
 import java.util.Set;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 import org.eclipse.microprofile.config.ConfigProvider;
 import org.jboss.logging.Logger;
@@ -39,7 +41,6 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.utility.DockerImageName;
 
-import io.quarkus.deployment.IsDockerWorking;
 import io.quarkus.deployment.IsNormal;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
@@ -47,6 +48,7 @@ import io.quarkus.deployment.builditem.CuratedApplicationShutdownBuildItem;
 import io.quarkus.deployment.builditem.DevServicesResultBuildItem;
 import io.quarkus.deployment.builditem.DevServicesResultBuildItem.RunningDevService;
 import io.quarkus.deployment.builditem.DevServicesSharedNetworkBuildItem;
+import io.quarkus.deployment.builditem.DockerStatusBuildItem;
 import io.quarkus.deployment.builditem.LaunchModeBuildItem;
 import io.quarkus.deployment.console.ConsoleInstalledBuildItem;
 import io.quarkus.deployment.console.StartupLogCompressor;
@@ -121,10 +123,10 @@ public class KeycloakDevServicesProcessor {
     static volatile DevServicesConfig capturedDevServicesConfiguration;
     private static volatile boolean first = true;
     private static volatile FileTime capturedRealmFileLastModifiedDate;
-    private final IsDockerWorking isDockerWorking = new IsDockerWorking(true);
 
     @BuildStep(onlyIfNot = IsNormal.class, onlyIf = { IsEnabled.class, GlobalDevServicesConfig.Enabled.class })
     public DevServicesResultBuildItem startKeycloakContainer(
+            DockerStatusBuildItem dockerStatusBuildItem,
             BuildProducer<KeycloakDevServicesConfigBuildItem> keycloakBuildItemBuildProducer,
             List<DevServicesSharedNetworkBuildItem> devServicesSharedNetworkBuildItem,
             Optional<OidcDevServicesBuildItem> oidcProviderBuildItem,
@@ -155,7 +157,14 @@ public class KeycloakDevServicesProcessor {
                 }
             }
             if (!restartRequired) {
-                return devService.toBuildItem();
+                DevServicesResultBuildItem result = devService.toBuildItem();
+                String usersString = result.getConfig().get(OIDC_USERS);
+                Map<String, String> users = (usersString == null || usersString.isBlank()) ? Map.of()
+                        : Arrays.stream(usersString.split(","))
+                                .map(s -> s.split("=")).collect(Collectors.toMap(s -> s[0], s -> s[1]));
+                keycloakBuildItemBuildProducer
+                        .produce(new KeycloakDevServicesConfigBuildItem(result.getConfig(), Map.of(OIDC_USERS, users)));
+                return result;
             }
             try {
                 devService.close();
@@ -173,7 +182,7 @@ public class KeycloakDevServicesProcessor {
             vertxInstance = Vertx.vertx();
         }
         try {
-            RunningDevService newDevService = startContainer(keycloakBuildItemBuildProducer,
+            RunningDevService newDevService = startContainer(dockerStatusBuildItem, keycloakBuildItemBuildProducer,
                     !devServicesSharedNetworkBuildItem.isEmpty(),
                     devServicesConfig.timeout);
             if (newDevService == null) {
@@ -213,7 +222,11 @@ public class KeycloakDevServicesProcessor {
             }
 
             capturedRealmFileLastModifiedDate = getRealmFileLastModifiedDate(capturedDevServicesConfiguration.realmPath);
-            compressor.close();
+            if (devService == null) {
+                compressor.closeAndDumpCaptured();
+            } else {
+                compressor.close();
+            }
         } catch (Throwable t) {
             compressor.closeAndDumpCaptured();
             throw new RuntimeException(t);
@@ -257,6 +270,8 @@ public class KeycloakDevServicesProcessor {
         configProperties.put(APPLICATION_TYPE_CONFIG_KEY, oidcApplicationType);
         configProperties.put(CLIENT_ID_CONFIG_KEY, oidcClientId);
         configProperties.put(CLIENT_SECRET_CONFIG_KEY, oidcClientSecret);
+        configProperties.put(OIDC_USERS, users.entrySet().stream()
+                .map(e -> e.toString()).collect(Collectors.joining(",")));
 
         keycloakBuildItemBuildProducer
                 .produce(new KeycloakDevServicesConfigBuildItem(configProperties, Map.of(OIDC_USERS, users)));
@@ -272,7 +287,8 @@ public class KeycloakDevServicesProcessor {
         return capturedDevServicesConfiguration.realmName.orElse("quarkus");
     }
 
-    private RunningDevService startContainer(BuildProducer<KeycloakDevServicesConfigBuildItem> keycloakBuildItemBuildProducer,
+    private RunningDevService startContainer(DockerStatusBuildItem dockerStatusBuildItem,
+            BuildProducer<KeycloakDevServicesConfigBuildItem> keycloakBuildItemBuildProducer,
             boolean useSharedNetwork, Optional<Duration> timeout) {
         if (!capturedDevServicesConfiguration.enabled) {
             // explicitly disabled
@@ -292,7 +308,7 @@ public class KeycloakDevServicesProcessor {
             return null;
         }
 
-        if (!isDockerWorking.getAsBoolean()) {
+        if (!dockerStatusBuildItem.isDockerAvailable()) {
             LOG.warn("Please configure 'quarkus.oidc.auth-server-url' or get a working docker instance");
             return null;
         }

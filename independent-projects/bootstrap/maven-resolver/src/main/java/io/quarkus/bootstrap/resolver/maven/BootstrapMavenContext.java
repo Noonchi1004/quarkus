@@ -29,7 +29,7 @@ import org.apache.maven.model.building.ModelBuilder;
 import org.apache.maven.model.building.ModelProblemCollector;
 import org.apache.maven.model.building.ModelProblemCollectorRequest;
 import org.apache.maven.model.path.DefaultPathTranslator;
-import org.apache.maven.model.path.PathTranslator;
+import org.apache.maven.model.path.ProfileActivationFilePathInterpolator;
 import org.apache.maven.model.profile.DefaultProfileActivationContext;
 import org.apache.maven.model.profile.DefaultProfileSelector;
 import org.apache.maven.model.profile.activation.FileProfileActivator;
@@ -204,15 +204,17 @@ public class BootstrapMavenContext {
     }
 
     public File getUserSettings() {
-        return userSettings == null
-                ? userSettings = resolveSettingsFile(
-                        getCliOptions().getOptionValue(BootstrapMavenOptions.ALTERNATE_USER_SETTINGS),
-                        () -> {
-                            final String quarkusMavenSettings = getProperty(MAVEN_SETTINGS);
-                            return quarkusMavenSettings == null ? new File(getUserMavenConfigurationHome(), SETTINGS_XML)
-                                    : new File(quarkusMavenSettings);
-                        })
-                : userSettings;
+        if (userSettings == null) {
+            final String quarkusMavenSettings = getProperty(MAVEN_SETTINGS);
+            if (quarkusMavenSettings != null) {
+                var f = new File(quarkusMavenSettings);
+                return userSettings = f.exists() ? f : null;
+            }
+            return userSettings = resolveSettingsFile(
+                    getCliOptions().getOptionValue(BootstrapMavenOptions.ALTERNATE_USER_SETTINGS),
+                    () -> new File(getUserMavenConfigurationHome(), SETTINGS_XML));
+        }
+        return userSettings;
     }
 
     private static File getUserMavenConfigurationHome() {
@@ -506,7 +508,6 @@ public class BootstrapMavenContext {
     }
 
     private List<RemoteRepository> resolveRemoteRepos() throws BootstrapMavenException {
-
         final List<RemoteRepository> rawRepos = new ArrayList<>();
         readMavenReposFromEnv(rawRepos, System.getenv());
 
@@ -967,19 +968,17 @@ public class BootstrapMavenContext {
         var activator = new FileProfileActivator();
         var translator = new DefaultPathTranslator();
         try {
-            activator.setPathTranslator(translator);
-        } catch (LinkageError e) {
-            // setPathTranslator() not found; Maven >= 3.8.5 (https://github.com/apache/maven/pull/649)
+            var pathInterpolator = new ProfileActivationFilePathInterpolator();
+            pathInterpolator.setPathTranslator(translator);
+            activator.setProfileActivationFilePathInterpolator(pathInterpolator);
+        } catch (NoClassDefFoundError e) {
+            // ProfileActivationFilePathInterpolator not found; Maven < 3.8.5 (https://github.com/apache/maven/pull/649)
             try {
-                var interpolatorClass = Thread.currentThread().getContextClassLoader()
-                        .loadClass("org.apache.maven.model.path.ProfileActivationFilePathInterpolator");
-                var interpolator = interpolatorClass.getDeclaredConstructor().newInstance();
-                interpolatorClass.getMethod("setPathTranslator", PathTranslator.class)
-                        .invoke(interpolator, translator);
-                activator.getClass().getMethod("setProfileActivationFilePathInterpolator", interpolatorClass)
-                        .invoke(activator, interpolator);
+                activator.getClass().getMethod("setPathTranslator", org.apache.maven.model.path.PathTranslator.class)
+                        .invoke(activator, translator);
             } catch (ReflectiveOperationException reflectionExc) {
-                throw new BootstrapMavenException("Failed to set up Maven 3.8.5+ ProfileActivationFilePathInterpolator",
+                throw new BootstrapMavenException(
+                        "Failed to set up DefaultPathTranslator for Maven < 3.8.5 DefaultPathTranslator",
                         reflectionExc);
             }
         }

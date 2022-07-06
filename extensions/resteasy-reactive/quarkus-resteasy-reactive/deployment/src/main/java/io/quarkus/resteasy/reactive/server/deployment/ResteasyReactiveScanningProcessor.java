@@ -73,6 +73,7 @@ import io.quarkus.resteasy.reactive.spi.ExceptionMapperBuildItem;
 import io.quarkus.resteasy.reactive.spi.JaxrsFeatureBuildItem;
 import io.quarkus.resteasy.reactive.spi.ParamConverterBuildItem;
 import io.quarkus.runtime.BlockingOperationNotAllowedException;
+import io.quarkus.vertx.http.runtime.HttpBuildTimeConfig;
 
 /**
  * Processor that handles scanning for types and turning them into build items
@@ -90,8 +91,8 @@ public class ResteasyReactiveScanningProcessor {
     }
 
     @BuildStep
-    public MethodScannerBuildItem compressionSupport() {
-        return new MethodScannerBuildItem(new CompressionScanner());
+    public MethodScannerBuildItem compressionSupport(HttpBuildTimeConfig httpBuildTimeConfig) {
+        return new MethodScannerBuildItem(new CompressionScanner(httpBuildTimeConfig));
     }
 
     @BuildStep
@@ -318,11 +319,11 @@ public class ResteasyReactiveScanningProcessor {
                 additionalBeans.addBeanClass(generated.getDeclaringClassName());
                 ContainerRequestFilterBuildItem.Builder builder = new ContainerRequestFilterBuildItem.Builder(
                         generated.getGeneratedClassName())
-                                .setRegisterAsBean(false) // it has already been made a bean
-                                .setPriority(generated.getPriority())
-                                .setPreMatching(generated.isPreMatching())
-                                .setNonBlockingRequired(generated.isNonBlocking())
-                                .setReadBody(generated.isReadBody());
+                        .setRegisterAsBean(false) // it has already been made a bean
+                        .setPriority(generated.getPriority())
+                        .setPreMatching(generated.isPreMatching())
+                        .setNonBlockingRequired(generated.isNonBlocking())
+                        .setReadBody(generated.isReadBody());
                 if (!generated.getNameBindingNames().isEmpty()) {
                     builder.setNameBindingNames(generated.getNameBindingNames());
                 }
@@ -333,8 +334,11 @@ public class ResteasyReactiveScanningProcessor {
                 additionalBeans.addBeanClass(generated.getDeclaringClassName());
                 ContainerResponseFilterBuildItem.Builder builder = new ContainerResponseFilterBuildItem.Builder(
                         generated.getGeneratedClassName())
-                                .setRegisterAsBean(false)// it has already been made a bean
-                                .setPriority(generated.getPriority());
+                        .setRegisterAsBean(false)// it has already been made a bean
+                        .setPriority(generated.getPriority());
+                if (!generated.getNameBindingNames().isEmpty()) {
+                    builder.setNameBindingNames(generated.getNameBindingNames());
+                }
                 additionalContainerResponseFilters.produce(builder.build());
             }
         }

@@ -108,7 +108,7 @@ public class CustomQueryMethodsAdder extends AbstractMethodsAdder {
                         "Offending method is " + methodName + " of Repository " + repositoryName);
             }
 
-            List<Type> methodParameterTypes = method.parameters();
+            List<Type> methodParameterTypes = method.parameterTypes();
             String[] methodParameterTypesStr = new String[methodParameterTypes.size()];
             List<Integer> queryParameterIndexes = new ArrayList<>(methodParameterTypes.size());
             Integer pageableParameterIndex = null;
@@ -497,14 +497,14 @@ public class CustomQueryMethodsAdder extends AbstractMethodsAdder {
             for (Map.Entry<String, List<String>> queryMethod : queryMethods.entrySet()) {
                 try (MethodCreator convert = implClassCreator.getMethodCreator("convert_" + queryMethod.getKey(),
                         implName.toString(), Object[].class.getName())) {
-                    convert.setModifiers(Modifier.STATIC);
+                    convert.setModifiers(Modifier.STATIC | Modifier.PUBLIC);
 
                     ResultHandle newObject = convert.newInstance(MethodDescriptor.ofConstructor(implName.toString()));
 
                     // Use field names in the query-declared order
                     List<String> queryNames = queryMethod.getValue();
 
-                    // Object[] is the only paramter: values are in column/declared order
+                    // Object[] is the only parameter: values are in column/declared order
                     ResultHandle array = convert.getMethodParam(0);
 
                     for (int i = 0; i < queryNames.size(); i++) {

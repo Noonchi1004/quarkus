@@ -20,6 +20,7 @@ import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNa
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.FORM_PARAM;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.HEADER_PARAM;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.HTTP_HEADERS;
+import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.INSTANT;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.INTEGER;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.LIST;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.LOCAL_DATE;
@@ -59,6 +60,7 @@ import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNa
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.REST_RESPONSE;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.REST_SSE_ELEMENT_TYPE;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.REST_STREAM_ELEMENT_TYPE;
+import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.RUN_ON_VIRTUAL_THREAD;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.SECURITY_CONTEXT;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.SERVER_REQUEST_CONTEXT;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.SET;
@@ -116,6 +118,7 @@ import org.jboss.resteasy.reactive.common.model.MethodParameter;
 import org.jboss.resteasy.reactive.common.model.ParameterType;
 import org.jboss.resteasy.reactive.common.model.ResourceClass;
 import org.jboss.resteasy.reactive.common.model.ResourceMethod;
+import org.jboss.resteasy.reactive.common.processor.TargetJavaVersion.Status;
 import org.jboss.resteasy.reactive.common.processor.scanning.ApplicationScanningResult;
 import org.jboss.resteasy.reactive.common.processor.transformation.AnnotationStore;
 import org.jboss.resteasy.reactive.common.processor.transformation.AnnotationsTransformer;
@@ -143,7 +146,8 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
             DotName.createSimple("org.jboss.resteasy.reactive.server.SimpleResourceInfo"), //TODO: fixme
             RESOURCE_INFO)));
 
-    private static final Set<DotName> SUPPORT_TEMPORAL_PARAMS = Set.of(LOCAL_DATE, LOCAL_TIME, LOCAL_DATE_TIME, OFFSET_TIME,
+    private static final Set<DotName> SUPPORT_TEMPORAL_PARAMS = Set.of(INSTANT, LOCAL_DATE, LOCAL_TIME, LOCAL_DATE_TIME,
+            OFFSET_TIME,
             OFFSET_DATE_TIME, ZONED_DATE_TIME);
 
     protected static final Logger log = Logger.getLogger(EndpointIndexer.class);
@@ -154,6 +158,9 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
 
     public static final String METHOD_CONTEXT_CUSTOM_RETURN_TYPE_KEY = "METHOD_CONTEXT_CUSTOM_RETURN_TYPE_KEY";
     public static final String METHOD_CONTEXT_ANNOTATION_STORE = "ANNOTATION_STORE";
+    public static final String METHOD_PRODUCES = "METHOD_PRODUCES";
+
+    private static final boolean JDK_SUPPORTS_VIRTUAL_THREADS;
 
     static {
         Map<String, String> prims = new HashMap<>();
@@ -191,6 +198,14 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
         supportedReaderJavaTps.put(BIG_DECIMAL, BigDecimal.class);
         supportedReaderJavaTps.put(BIG_INTEGER, BigInteger.class);
         supportedReaderJavaTypes = Collections.unmodifiableMap(supportedReaderJavaTps);
+
+        boolean isJDKCompatible = true;
+        try {
+            Class.forName("java.lang.ThreadBuilders");
+        } catch (ClassNotFoundException e) {
+            isJDKCompatible = false;
+        }
+        JDK_SUPPORTS_VIRTUAL_THREADS = isJDKCompatible;
     }
 
     protected final IndexView index;
@@ -213,6 +228,7 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
     private final Set<DotName> contextTypes;
     private final MultipartReturnTypeIndexerExtension multipartReturnTypeIndexerExtension;
     private final MultipartParameterIndexerExtension multipartParameterIndexerExtension;
+    private final TargetJavaVersion targetJavaVersion;
 
     protected EndpointIndexer(Builder<T, ?, METHOD> builder) {
         this.index = builder.index;
@@ -234,6 +250,7 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
         this.contextTypes = builder.contextTypes;
         this.multipartReturnTypeIndexerExtension = builder.multipartReturnTypeIndexerExtension;
         this.multipartParameterIndexerExtension = builder.multipartParameterIndexerExtension;
+        this.targetJavaVersion = builder.targetJavaVersion;
     }
 
     public Optional<ResourceClass> createEndpoints(ClassInfo classInfo, boolean considerApplication) {
@@ -300,11 +317,12 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
     private String sanitizePath(String path) {
         // this simply replaces the whitespace characters (not part of a path variable) with %20
         // TODO: this might have to be more complex, URL encoding maybe?
-        boolean inVariable = false;
+        // zero braces indicates we are outside of a variable
+        int bracesCount = 0;
         StringBuilder replaced = null;
         for (int i = 0; i < path.length(); i++) {
             char c = path.charAt(i);
-            if ((c == ' ') && (!inVariable)) {
+            if ((c == ' ') && (bracesCount == 0)) {
                 if (replaced == null) {
                     replaced = new StringBuilder(path.length() + 2);
                     replaced.append(path, 0, i);
@@ -316,9 +334,9 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
                 replaced.append(c);
             }
             if (c == '{') {
-                inVariable = true;
+                bracesCount++;
             } else if (c == '}') {
-                inVariable = false;
+                bracesCount--;
             }
         }
         if (replaced == null) {
@@ -372,6 +390,9 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
                     if (methodPath != null) {
                         if (!methodPath.startsWith("/")) {
                             methodPath = "/" + methodPath;
+                        }
+                        if (methodPath.endsWith("/")) {
+                            methodPath = methodPath.substring(0, methodPath.length() - 1);
                         }
                     } else {
                         methodPath = "";
@@ -479,10 +500,9 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
             methodContext.put(METHOD_CONTEXT_ANNOTATION_STORE, getAnnotationStore());
             Set<String> pathParameters = new HashSet<>(basicResourceClassInfo.getPathParameters());
             URLUtils.parsePathParameters(methodPath, pathParameters);
-            Map<DotName, AnnotationInstance>[] parameterAnnotations = new Map[currentMethodInfo.parameters().size()];
-            MethodParameter[] methodParameters = new MethodParameter[currentMethodInfo.parameters()
-                    .size()];
-            for (int paramPos = 0; paramPos < currentMethodInfo.parameters().size(); ++paramPos) {
+            Map<DotName, AnnotationInstance>[] parameterAnnotations = new Map[currentMethodInfo.parametersCount()];
+            MethodParameter[] methodParameters = new MethodParameter[currentMethodInfo.parametersCount()];
+            for (int paramPos = 0; paramPos < currentMethodInfo.parametersCount(); ++paramPos) {
                 parameterAnnotations[paramPos] = new HashMap<>();
             }
             for (AnnotationInstance i : getAnnotationStore().getAnnotations(currentMethodInfo)) {
@@ -501,7 +521,7 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
             for (int i = 0; i < methodParameters.length; ++i) {
                 Map<DotName, AnnotationInstance> anns = parameterAnnotations[i];
                 boolean encoded = anns.containsKey(ENCODED);
-                Type paramType = currentMethodInfo.parameters().get(i);
+                Type paramType = currentMethodInfo.parameterType(i);
                 String errorLocation = "method " + currentMethodInfo + " on class " + currentMethodInfo.declaringClass();
 
                 PARAM parameterResult = extractParameterInfo(currentClassInfo, actualEndpointInfo, currentMethodInfo,
@@ -609,24 +629,29 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
             }
             Set<String> nameBindingNames = nameBindingNames(currentMethodInfo, classNameBindings);
             boolean blocking = isBlocking(currentMethodInfo, defaultBlocking);
+            boolean runOnVirtualThread = isRunOnVirtualThread(currentMethodInfo, defaultBlocking);
             // we want to allow "overriding" the blocking/non-blocking setting from an implementation class
             // when the class defining the annotations is an interface
             if (!actualEndpointInfo.equals(currentClassInfo) && Modifier.isInterface(currentClassInfo.flags())) {
                 MethodInfo actualMethodInfo = actualEndpointInfo.method(currentMethodInfo.name(),
-                        currentMethodInfo.parameters().toArray(new Type[0]));
+                        currentMethodInfo.parameterTypes().toArray(new Type[0]));
                 if (actualMethodInfo != null) {
                     //we don't pass AUTOMATIC here, as the method signature would be the same, so the same determination
                     //would be reached for a default
-                    blocking = isBlocking(actualMethodInfo, blocking ? BlockingDefault.BLOCKING : BlockingDefault.NON_BLOCKING);
+                    blocking = isBlocking(actualMethodInfo,
+                            blocking ? BlockingDefault.BLOCKING : BlockingDefault.NON_BLOCKING);
+                    runOnVirtualThread = isRunOnVirtualThread(actualMethodInfo,
+                            blocking ? BlockingDefault.BLOCKING : BlockingDefault.NON_BLOCKING);
                 }
             }
 
             if (returnsMultipart && !blocking) {
                 throw new DeploymentException(
-                        "Endpoints that produce a Multipart result can only be used on non blocking methods. Offending method is '"
+                        "Endpoints that produce a Multipart result can only be used on blocking methods. Offending method is '"
                                 + currentMethodInfo.declaringClass().name() + "#" + currentMethodInfo + "'");
             }
 
+            methodContext.put(METHOD_PRODUCES, produces);
             ResourceMethod method = createResourceMethod(currentMethodInfo, actualEndpointInfo, methodContext)
                     .setHttpMethod(httpMethod == null ? null : httpAnnotationToMethod.get(httpMethod))
                     .setPath(sanitizePath(methodPath))
@@ -635,6 +660,7 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
                     .setNameBindingNames(nameBindingNames)
                     .setName(currentMethodInfo.name())
                     .setBlocking(blocking)
+                    .setRunOnVirtualThread(runOnVirtualThread)
                     .setSuspended(suspended)
                     .setSse(sse)
                     .setStreamElementType(streamElementType)
@@ -687,15 +713,65 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
         return value;
     }
 
+    private boolean isRunOnVirtualThread(MethodInfo info, BlockingDefault defaultValue) {
+        boolean isRunOnVirtualThread = false;
+        Map.Entry<AnnotationTarget, AnnotationInstance> runOnVirtualThreadAnnotation = getInheritableAnnotation(info,
+                RUN_ON_VIRTUAL_THREAD);
+
+        //should the Transactional annotation override the annotation @RunOnVirtualThread ?
+        //here it does : it is impossible for a transaction to run on a virtual thread
+        Map.Entry<AnnotationTarget, AnnotationInstance> transactional = getInheritableAnnotation(info, TRANSACTIONAL); //we treat this the same as blocking, as JTA is blocking, but it is lower priority
+        if (transactional != null) {
+            return false;
+        }
+
+        if (runOnVirtualThreadAnnotation != null) {
+            if (!JDK_SUPPORTS_VIRTUAL_THREADS) {
+                throw new DeploymentException("Method '" + info.name() + "' of class '" + info.declaringClass().name()
+                        + "' uses @RunOnVirtualThread but the JDK version '" + Runtime.version() +
+                        "' and doesn't support virtual threads");
+            }
+            if (targetJavaVersion.isJava19OrHigher() == Status.FALSE) {
+                throw new DeploymentException("Method '" + info.name() + "' of class '" + info.declaringClass().name()
+                        + "' uses @RunOnVirtualThread but the target JDK version doesn't support virtual threads. Please configure your build tool to target Java 19 or above");
+            }
+            isRunOnVirtualThread = true;
+        }
+
+        //BlockingDefault.BLOCKING should mean "block a platform thread" ? here it does
+        if (defaultValue == BlockingDefault.BLOCKING) {
+            return false;
+        } else if (defaultValue == BlockingDefault.RUN_ON_VIRTUAL_THREAD) {
+            isRunOnVirtualThread = true;
+        } else if (defaultValue == BlockingDefault.NON_BLOCKING) {
+            return false;
+        }
+
+        if (isRunOnVirtualThread && !isBlocking(info, defaultValue)) {
+            throw new DeploymentException(
+                    "Method '" + info.name() + "' of class '" + info.declaringClass().name()
+                            + "' is considered a non blocking method. @RunOnVirtualThread can only be used on " +
+                            " methods considered blocking");
+        } else if (isRunOnVirtualThread) {
+            return true;
+        }
+
+        return false;
+    }
+
     private boolean isBlocking(MethodInfo info, BlockingDefault defaultValue) {
         Map.Entry<AnnotationTarget, AnnotationInstance> blockingAnnotation = getInheritableAnnotation(info, BLOCKING);
+        Map.Entry<AnnotationTarget, AnnotationInstance> runOnVirtualThreadAnnotation = getInheritableAnnotation(info,
+                RUN_ON_VIRTUAL_THREAD);
         Map.Entry<AnnotationTarget, AnnotationInstance> nonBlockingAnnotation = getInheritableAnnotation(info,
                 NON_BLOCKING);
+
         if ((blockingAnnotation != null) && (nonBlockingAnnotation != null)) {
             if (blockingAnnotation.getKey().kind() == nonBlockingAnnotation.getKey().kind()) {
                 if (blockingAnnotation.getKey().kind() == AnnotationTarget.Kind.METHOD) {
-                    throw new DeploymentException("Method '" + info.name() + "' of class '" + info.declaringClass().name()
-                            + "' contains both @Blocking and @NonBlocking annotations.");
+                    throw new DeploymentException(
+                            "Method '" + info.name() + "' of class '" + info.declaringClass().name()
+                                    + "' contains both @Blocking and @NonBlocking annotations.");
                 } else {
                     throw new DeploymentException("Class '" + info.declaringClass().name()
                             + "' contains both @Blocking and @NonBlocking annotations.");
@@ -719,6 +795,8 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
         }
         if (defaultValue == BlockingDefault.BLOCKING) {
             return true;
+        } else if (defaultValue == BlockingDefault.RUN_ON_VIRTUAL_THREAD) {
+            return false;
         } else if (defaultValue == BlockingDefault.NON_BLOCKING) {
             return false;
         }
@@ -1118,7 +1196,7 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
                     // so this is completely safe
                     var type = toClassName(paramType, currentClassInfo, actualEndpointInfo, index);
                     var typeInfo = index.getClassByName(DotName.createSimple(type));
-                    if (typeInfo != null && typeInfo.annotations().containsKey(REST_FORM_PARAM)) {
+                    if (typeInfo != null && typeInfo.annotationsMap().containsKey(REST_FORM_PARAM)) {
                         builder.setType(ParameterType.MULTI_PART_FORM);
                     } else {
                         //if the paramater does not have @RestForm annotations we treat it as a normal body
@@ -1335,6 +1413,7 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
             public void handleMultipartParameter(ClassInfo multipartClassInfo, IndexView indexView) {
             }
         };
+        private TargetJavaVersion targetJavaVersion = new TargetJavaVersion.Unknown();
 
         public B setMultipartReturnTypeIndexerExtension(MultipartReturnTypeIndexerExtension multipartReturnTypeHandler) {
             this.multipartReturnTypeIndexerExtension = multipartReturnTypeHandler;
@@ -1433,6 +1512,11 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
 
         public B setApplicationScanningResult(ApplicationScanningResult applicationScanningResult) {
             this.applicationScanningResult = applicationScanningResult;
+            return (B) this;
+        }
+
+        public B setTargetJavaVersion(TargetJavaVersion targetJavaVersion) {
+            this.targetJavaVersion = targetJavaVersion;
             return (B) this;
         }
 

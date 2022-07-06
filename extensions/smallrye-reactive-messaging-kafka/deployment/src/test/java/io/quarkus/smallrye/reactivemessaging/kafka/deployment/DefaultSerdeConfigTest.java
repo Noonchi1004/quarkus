@@ -19,6 +19,8 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.Headers;
+import org.apache.kafka.common.serialization.Deserializer;
+import org.apache.kafka.common.serialization.Serializer;
 import org.assertj.core.groups.Tuple;
 import org.eclipse.microprofile.config.Config;
 import org.eclipse.microprofile.config.spi.ConfigProviderResolver;
@@ -49,7 +51,9 @@ import io.smallrye.reactive.messaging.MutinyEmitter;
 import io.smallrye.reactive.messaging.kafka.KafkaRecord;
 import io.smallrye.reactive.messaging.kafka.KafkaRecordBatch;
 import io.smallrye.reactive.messaging.kafka.Record;
+import io.smallrye.reactive.messaging.kafka.transactions.KafkaTransactions;
 import io.vertx.core.json.JsonArray;
+import io.vertx.core.json.JsonObject;
 
 public class DefaultSerdeConfigTest {
     private static void doTest(Tuple[] expectations, Class<?>... classesToIndex) {
@@ -2551,6 +2555,145 @@ public class DefaultSerdeConfigTest {
         Record<Long, String> method3(Record<Long, String> msg) {
             return null;
         }
+    }
+
+    // ---
+
+    @Test
+    public void genericSerdeImplementationAutoDetect() {
+        // @formatter:off
+
+        Tuple[] expectations1 = {
+                tuple("mp.messaging.outgoing.channel1.value.serializer", "org.apache.kafka.common.serialization.LongSerializer"),
+
+                tuple("mp.messaging.incoming.channel2.key.deserializer", "org.apache.kafka.common.serialization.LongDeserializer"),
+                tuple("mp.messaging.incoming.channel2.value.deserializer", "io.vertx.kafka.client.serialization.JsonObjectDeserializer"),
+        };
+
+        Tuple[] expectations2 = {
+                tuple("mp.messaging.outgoing.channel1.value.serializer", "io.quarkus.smallrye.reactivemessaging.kafka.deployment.DefaultSerdeConfigTest$MySerializer"),
+
+                tuple("mp.messaging.incoming.channel2.key.deserializer", "org.apache.kafka.common.serialization.LongDeserializer"),
+                tuple("mp.messaging.incoming.channel2.value.deserializer", "io.quarkus.smallrye.reactivemessaging.kafka.deployment.DefaultSerdeConfigTest$MyDeserializer"),
+
+                tuple("mp.messaging.incoming.channel3.value.deserializer", "io.quarkus.smallrye.reactivemessaging.kafka.deployment.DefaultSerdeConfigTest$CustomDtoDeserializer"),
+        };
+
+        Tuple[] expectations3 = {
+                tuple("mp.messaging.outgoing.channel1.value.serializer", "io.quarkus.smallrye.reactivemessaging.kafka.deployment.DefaultSerdeConfigTest$MySerializer"),
+
+                tuple("mp.messaging.incoming.channel2.key.deserializer", "org.apache.kafka.common.serialization.LongDeserializer"),
+                tuple("mp.messaging.incoming.channel2.value.deserializer", "io.quarkus.smallrye.reactivemessaging.kafka.deployment.DefaultSerdeConfigTest$MyDeserializer"),
+
+                tuple("mp.messaging.incoming.channel3.value.deserializer", "io.quarkus.smallrye.reactivemessaging.kafka.deployment.DefaultSerdeConfigTest$MyObjectMapperDeserializer"),
+        };
+        Tuple[] expectations4 = {
+                tuple("mp.messaging.outgoing.channel1.value.serializer", "org.apache.kafka.common.serialization.LongSerializer"),
+
+                tuple("mp.messaging.incoming.channel2.key.deserializer", "org.apache.kafka.common.serialization.LongDeserializer"),
+                tuple("mp.messaging.incoming.channel2.value.deserializer", "io.quarkus.smallrye.reactivemessaging.kafka.deployment.DefaultSerdeConfigTest$MyDeserializer"),
+
+                tuple("mp.messaging.incoming.channel3.value.deserializer", "io.quarkus.smallrye.reactivemessaging.kafka.deployment.DefaultSerdeConfigTest$MyObjectMapperDeserializer"),
+        };
+        // @formatter:on
+
+        doTest(expectations1, CustomSerdeImplementation.class, CustomDto.class);
+
+        doTest(expectations2, CustomSerdeImplementation.class, CustomDto.class,
+                MySerializer.class,
+                MyDeserializer.class, MyObjectMapperDeserializer.class, CustomDtoDeserializer.class);
+
+        doTest(expectations3, CustomSerdeImplementation.class, CustomDto.class,
+                MySerializer.class,
+                MyDeserializer.class, MyObjectMapperDeserializer.class);
+
+        doTest(expectations4, CustomSerdeImplementation.class, CustomDto.class,
+                MyWrongSerializer.class, CustomInterface.class,
+                MyDeserializer.class, MyObjectMapperDeserializer.class);
+    }
+
+    private static class CustomDto {
+
+    }
+
+    private interface CustomInterface<T> {
+
+    }
+
+    private static class MyWrongSerializer implements Serializer<Integer>, CustomInterface<Long> {
+
+        @Override
+        public byte[] serialize(String topic, Integer data) {
+            return new byte[0];
+        }
+    }
+
+    private static class MySerializer implements Serializer<Long>, CustomInterface<Long> {
+
+        @Override
+        public byte[] serialize(String topic, Long data) {
+            return new byte[0];
+        }
+    }
+
+    private static class MyDeserializer implements Deserializer<JsonObject> {
+
+        @Override
+        public JsonObject deserialize(String topic, byte[] data) {
+            return null;
+        }
+    }
+
+    private static class MyObjectMapperDeserializer extends ObjectMapperDeserializer<CustomDto> {
+
+        public MyObjectMapperDeserializer() {
+            super(CustomDto.class);
+        }
+    }
+
+    private static class CustomDtoDeserializer implements Deserializer<CustomDto> {
+
+        @Override
+        public CustomDto deserialize(String topic, byte[] data) {
+            return null;
+        }
+    }
+
+    private static class CustomSerdeImplementation {
+        @Outgoing("channel1")
+        Multi<Long> method1() {
+            return null;
+        }
+
+        @Incoming("channel2")
+        void method2(Record<Long, JsonObject> msg) {
+
+        }
+
+        @Incoming("channel3")
+        void method3(CustomDto payload) {
+
+        }
+    }
+
+    @Test
+    void kafkaTransactions() {
+        // @formatter:off
+        Tuple[] expectations = {
+                tuple("mp.messaging.outgoing.tx.value.serializer", "org.apache.kafka.common.serialization.StringSerializer"),
+                tuple("mp.messaging.outgoing.tx.transactional.id", "${quarkus.application.name}-tx"),
+                tuple("mp.messaging.outgoing.tx.enable.idempotence", "true"),
+                tuple("mp.messaging.outgoing.tx.acks", "all"),
+        };
+        doTest(expectations, TransactionalProducer.class);
+
+    }
+
+    private static class TransactionalProducer {
+
+        @Channel("tx")
+        KafkaTransactions<String> kafkaTransactions;
+
     }
 
 }

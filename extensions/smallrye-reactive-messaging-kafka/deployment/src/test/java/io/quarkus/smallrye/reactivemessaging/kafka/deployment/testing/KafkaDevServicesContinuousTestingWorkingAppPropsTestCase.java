@@ -16,7 +16,7 @@ public class KafkaDevServicesContinuousTestingWorkingAppPropsTestCase {
 
     @RegisterExtension
     public static QuarkusDevModeTest test = new QuarkusDevModeTest()
-            .setArchiveProducer(new Supplier<JavaArchive>() {
+            .setArchiveProducer(new Supplier<>() {
                 @Override
                 public JavaArchive get() {
                     return ShrinkWrap.create(JavaArchive.class)
@@ -24,7 +24,7 @@ public class KafkaDevServicesContinuousTestingWorkingAppPropsTestCase {
                             .addAsResource(new StringAsset(KafkaDevServicesContinuousTestingTestCase.FINAL_APP_PROPERTIES),
                                     "application.properties");
                 }
-            }).setTestArchiveProducer(new Supplier<JavaArchive>() {
+            }).setTestArchiveProducer(new Supplier<>() {
                 @Override
                 public JavaArchive get() {
                     return ShrinkWrap.create(JavaArchive.class).addClass(PriceResourceET.class);
@@ -32,9 +32,9 @@ public class KafkaDevServicesContinuousTestingWorkingAppPropsTestCase {
             });
 
     /**
-     * Similar to {@link KafkaDevServicesContinuousTestingTestCase} however it starts with application.properties configued
+     * Similar to {@link KafkaDevServicesContinuousTestingTestCase} however it starts with application.properties configured.
      *
-     * see https://github.com/quarkusio/quarkus/issues/19180
+     * See https://github.com/quarkusio/quarkus/issues/19180.
      */
     @Test
     public void testContinuousTestingScenario3() {

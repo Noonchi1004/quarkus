@@ -24,6 +24,8 @@ import org.jboss.jandex.DotName;
 import org.jboss.jandex.FieldInfo;
 import org.jboss.jandex.IndexView;
 import org.jboss.jandex.MethodInfo;
+import org.jboss.jandex.MethodParameterInfo;
+import org.jboss.jandex.Type;
 
 import io.quarkus.arc.deployment.AdditionalStereotypeBuildItem;
 import io.quarkus.arc.deployment.AnnotationsTransformerBuildItem;
@@ -76,6 +78,7 @@ public class SpringDIProcessor {
     private static final DotName CDI_NAMED_ANNOTATION = DotNames.NAMED;
     private static final DotName CDI_INJECT_ANNOTATION = DotNames.INJECT;
     private static final DotName CDI_PRODUCES_ANNOTATION = DotNames.PRODUCES;
+    private static final DotName QUARKUS_ALL_ANNOTATION = DotNames.ALL;
     private static final DotName MP_CONFIG_PROPERTY_ANNOTATION = DotName.createSimple(ConfigProperty.class.getName());
 
     @BuildStep
@@ -86,7 +89,7 @@ public class SpringDIProcessor {
     /*
      * This Build Item can't be generated in the beanTransformer method because the annotation transformer
      * is generated lazily.
-     * However the logic is the same
+     * However, the logic is the same.
      */
     @BuildStep
     SpringBeanNameToDotNameBuildItem createBeanNamesMap(BeanArchiveIndexBuildItem beanArchiveIndexBuildItem) {
@@ -161,7 +164,7 @@ public class SpringDIProcessor {
         final List<ClassInfo> allAnnotations = getOrderedAnnotations(index);
         final Set<DotName> stereotypeClasses = new HashSet<>(SPRING_STEREOTYPE_ANNOTATIONS);
         for (final ClassInfo clazz : allAnnotations) {
-            final Set<DotName> clazzAnnotations = clazz.annotations().keySet();
+            final Set<DotName> clazzAnnotations = clazz.annotationsMap().keySet();
             final Set<DotName> clazzStereotypes = new HashSet<>();
             final Set<DotName> clazzScopes = new HashSet<>();
             for (final DotName stereotypeName : stereotypeClasses) {
@@ -235,7 +238,7 @@ public class SpringDIProcessor {
 
     /**
      * @return All the annotations in the index ordered with dependents after their dependencies.
-     *         They are traversed in this order so that we can start with out root annotations
+     *         They are traversed in this order so that we can start without root annotations
      *         (@Component, @Service & @Repository) and create a set of everything that extends it
      *         directly or indirectly.
      */
@@ -243,7 +246,7 @@ public class SpringDIProcessor {
         final Map<DotName, Set<DotName>> deps = new HashMap<>();
         for (final ClassInfo clazz : index.getKnownClasses()) {
             if (clazz.isAnnotation()) {
-                deps.put(clazz.name(), clazz.annotations().keySet());
+                deps.put(clazz.name(), clazz.annotationsMap().keySet());
             }
         }
         final List<ClassInfo> ret = new ArrayList<>();
@@ -277,7 +280,7 @@ public class SpringDIProcessor {
      *
      * @param target The annotated class
      * @param stereotypeScopes A map on spring stereotype classes to all the scopes
-     *        they, or any of their stereotypes (etc) declare
+     *        they, or any of their stereotypes (etc.) declare
      * @return The CDI annotations to add to the class
      */
     Set<AnnotationInstance> getAnnotationsToAdd(
@@ -296,7 +299,7 @@ public class SpringDIProcessor {
             final Set<DotName> scopes = new HashSet<>();
             final Set<DotName> scopeStereotypes = new HashSet<>();
             final Set<String> names = new HashSet<>();
-            final Set<DotName> clazzAnnotations = classInfo.annotations().keySet();
+            final Set<DotName> clazzAnnotations = classInfo.annotationsMap().keySet();
 
             for (AnnotationInstance instance : classInfo.classAnnotations()) {
                 // make sure that we don't mix and match Spring and CDI annotations since this can cause a lot of problems
@@ -328,7 +331,8 @@ public class SpringDIProcessor {
                         declaredScope,
                         target,
                         Collections.emptyList()));
-            } else if (!(isAnnotation && scopes.isEmpty()) && !classInfo.annotations().containsKey(CONFIGURATION_ANNOTATION)) { // Annotations without an explicit scope shouldn't default to anything
+            } else if (!(isAnnotation && scopes.isEmpty())
+                    && !classInfo.annotationsMap().containsKey(CONFIGURATION_ANNOTATION)) { // Annotations without an explicit scope shouldn't default to anything
                 boolean shouldAdd = false;
                 for (final DotName clazzAnnotation : clazzAnnotations) {
                     if (stereotypes.contains(clazzAnnotation) || scopeStereotypes.contains(clazzAnnotation)) {
@@ -353,7 +357,7 @@ public class SpringDIProcessor {
                         Collections.singletonList(AnnotationValue.createStringValue("value", name))));
             }
 
-            if (classInfo.annotations().containsKey(CONFIGURATION_ANNOTATION)) {
+            if (classInfo.annotationsMap().containsKey(CONFIGURATION_ANNOTATION)) {
                 annotationsToAdd.add(create(
                         CDI_APP_SCOPED_ANNOTATION,
                         target,
@@ -383,6 +387,14 @@ public class SpringDIProcessor {
                                 target,
                                 Collections.singletonList((AnnotationValue.createStringValue("value", value)))));
                     }
+                }
+
+                // in Spring List<SomeBean> means that all instances of SomeBean should be injected
+                if (fieldInfo.type().name().equals(DotNames.LIST)) {
+                    annotationsToAdd.add(create(
+                            QUARKUS_ALL_ANNOTATION,
+                            target,
+                            Collections.emptyList()));
                 }
             } else if (fieldInfo.hasAnnotation(SPRING_VALUE_ANNOTATION)) {
                 final AnnotationInstance annotation = fieldInfo.annotation(SPRING_VALUE_ANNOTATION);
@@ -418,6 +430,18 @@ public class SpringDIProcessor {
                         CDI_INJECT_ANNOTATION,
                         target,
                         Collections.emptyList()));
+                // in Spring List<SomeBean> means that all instances of SomeBean should be injected
+                List<Type> parameters = methodInfo.parameterTypes();
+                for (int i = 0; i < parameters.size(); i++) {
+                    Type parameter = parameters.get(i);
+                    if (parameter.name().equals(DotNames.LIST)) {
+                        annotationsToAdd.add(create(
+                                QUARKUS_ALL_ANNOTATION,
+                                MethodParameterInfo.create(methodInfo, (short) i),
+                                Collections.emptyList()));
+                    }
+                }
+
             }
 
             // add method parameter conversion annotations

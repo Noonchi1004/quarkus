@@ -275,7 +275,7 @@ public abstract class ReactiveMongoOperations<QueryType, UpdateType> {
     }
 
     private Uni<Void> persistOrUpdate(ReactiveMongoCollection collection, List<Object> entities) {
-        //this will be an ordered bulk: it's less performant than a unordered one but will fail at the first failed write
+        //this will be an ordered bulk: it's less performant than an unordered one but will fail at the first failed write
         List<WriteModel> bulk = new ArrayList<>();
         for (Object entity : entities) {
             //we transform the entity as a document first
@@ -567,6 +567,9 @@ public abstract class ReactiveMongoOperations<QueryType, UpdateType> {
         Document sortDoc = new Document();
         for (Sort.Column col : sort.getColumns()) {
             sortDoc.append(col.getName(), col.getDirection() == Sort.Direction.Ascending ? 1 : -1);
+            if (col.getNullPrecedence() != null) {
+                throw new UnsupportedOperationException("Cannot sort by nulls first or nulls last");
+            }
         }
         return sortDoc;
     }

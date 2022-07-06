@@ -8,6 +8,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -235,7 +236,7 @@ public class ArcProcessor {
                 if (defaultScope != null) {
                     transformationContext.transform().add(defaultScope).done();
                 } else {
-                    if (!beanClass.annotations().containsKey(ADDITIONAL_BEAN)) {
+                    if (!beanClass.annotationsMap().containsKey(ADDITIONAL_BEAN)) {
                         // Add special stereotype is added so that @Dependent is automatically used even if no scope is declared
                         // Otherwise the bean class would be ignored during bean discovery
                         transformationContext.transform().add(ADDITIONAL_BEAN).done();
@@ -255,7 +256,6 @@ public class ArcProcessor {
             additionalStereotypes.putAll(item.getStereotypes());
         }
         builder.setAdditionalStereotypes(additionalStereotypes);
-        builder.setSharedAnnotationLiterals(true);
         builder.addResourceAnnotations(
                 resourceAnnotations.stream().map(ResourceAnnotationBuildItem::getName).collect(Collectors.toList()));
         // register all annotation transformers
@@ -512,7 +512,8 @@ public class ArcProcessor {
             LiveReloadBuildItem liveReloadBuildItem,
             BuildProducer<GeneratedResourceBuildItem> generatedResource,
             BuildProducer<BytecodeTransformerBuildItem> bytecodeTransformer,
-            List<ReflectiveBeanClassBuildItem> reflectiveBeanClasses) throws Exception {
+            List<ReflectiveBeanClassBuildItem> reflectiveBeanClasses,
+            Optional<CurrentContextFactoryBuildItem> currentContextFactory) throws Exception {
 
         for (ValidationErrorBuildItem validationError : validationErrors) {
             for (Throwable error : validationError.getValues()) {
@@ -593,7 +594,8 @@ public class ArcProcessor {
             reflectiveClasses.produce(new ReflectiveClassBuildItem(true, false, binding.name().toString()));
         }
 
-        ArcContainer container = recorder.getContainer(shutdown);
+        ArcContainer container = recorder.initContainer(shutdown,
+                currentContextFactory.isPresent() ? currentContextFactory.get().getFactory() : null);
         BeanContainer beanContainer = recorder.initBeanContainer(container,
                 beanContainerListenerBuildItems.stream().map(BeanContainerListenerBuildItem::getBeanContainerListener)
                         .collect(Collectors.toList()));
@@ -604,7 +606,7 @@ public class ArcProcessor {
     @BuildStep(onlyIf = IsTest.class)
     public AdditionalBeanBuildItem testApplicationClassPredicateBean() {
         // We need to register the bean implementation for TestApplicationClassPredicate
-        // TestApplicationClassPredicate is used programatically in the ArC recorder when StartupEvent is fired
+        // TestApplicationClassPredicate is used programmatically in the ArC recorder when StartupEvent is fired
         return AdditionalBeanBuildItem.unremovableOf(PreloadedTestApplicationClassPredicate.class);
     }
 
@@ -743,7 +745,7 @@ public class ArcProcessor {
                                 }
                             }
                             // Identifier is a hash of "type + method param annotations"
-                            String id = HashUtil.sha1(method.parameters().get(position) + paramAnnotations.toString());
+                            String id = HashUtil.sha1(method.parameterType(position) + paramAnnotations.toString());
                             toAdd.add(
                                     AnnotationInstance.create(DotNames.IDENTIFIED,
                                             MethodParameterInfo.create(method,
@@ -803,7 +805,9 @@ public class ArcProcessor {
 
         };
 
-        Set<TypeAndQualifiers> unremovables = new HashSet<>();
+        List<TypeAndQualifiers> unremovables = new ArrayList<>();
+        Set<String> ids = new HashSet<>();
+
         for (InjectionPointInfo injectionPoint : injectionPoints) {
 
             // The injection point must be registered immediately and NOT inside the creator callback
@@ -813,10 +817,21 @@ public class ArcProcessor {
                 reflectionRegistration.registerMethod(injectionPoint.getTarget().asMethod());
             }
 
+            AnnotationInstance identifiedAnnotation = injectionPoint.getRequiredQualifier(DotNames.IDENTIFIED);
+            if (identifiedAnnotation == null
+                    // The id is a hash of "type + all annotations" - if there's an exact match then we don't need to add another bean
+                    || !ids.add(identifiedAnnotation.value().asString())) {
+                continue;
+            }
+
             // All qualifiers but @All and @Identified
-            Set<AnnotationInstance> qualifiers = injectionPoint.getRequiredQualifiers().stream()
-                    .filter(a -> !DotNames.ALL.equals(a.name()) && !DotNames.IDENTIFIED.equals(a.name()))
-                    .collect(Collectors.toSet());
+            Set<AnnotationInstance> qualifiers = new HashSet<>(injectionPoint.getRequiredQualifiers());
+            for (Iterator<AnnotationInstance> it = qualifiers.iterator(); it.hasNext();) {
+                AnnotationInstance qualifier = it.next();
+                if (DotNames.ALL.equals(qualifier.name()) || DotNames.IDENTIFIED.equals(qualifier.name())) {
+                    it.remove();
+                }
+            }
             if (qualifiers.isEmpty()) {
                 // If no other qualifier is used then add @Any
                 qualifiers.add(AnnotationInstance.create(DotNames.ANY, null, new AnnotationValue[] {}));
@@ -824,14 +839,11 @@ public class ArcProcessor {
 
             Type elementType = injectionPoint.getType().asParameterizedType().arguments().get(0);
 
-            if (!unremovables
-                    .add(new TypeAndQualifiers(
-                            elementType.name().equals(DotNames.INSTANCE_HANDLE)
-                                    ? elementType.asParameterizedType().arguments().get(0)
-                                    : elementType,
-                            qualifiers))) {
-                continue;
-            }
+            unremovables.add(new TypeAndQualifiers(
+                    elementType.name().equals(DotNames.INSTANCE_HANDLE)
+                            ? elementType.asParameterizedType().arguments().get(0)
+                            : elementType,
+                    qualifiers));
 
             BeanConfigurator<?> configurator = beanRegistrationPhase.getContext()
                     .configure(List.class)

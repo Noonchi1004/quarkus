@@ -28,7 +28,6 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Properties;
 import java.util.Set;
-import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -44,7 +43,6 @@ import javax.transaction.TransactionManager;
 import javax.xml.bind.JAXBElement;
 import javax.xml.namespace.QName;
 
-import org.hibernate.MultiTenancyStrategy;
 import org.hibernate.boot.archive.scan.spi.ClassDescriptor;
 import org.hibernate.boot.archive.scan.spi.PackageDescriptor;
 import org.hibernate.cfg.AvailableSettings;
@@ -80,6 +78,7 @@ import io.quarkus.arc.deployment.UnremovableBeanBuildItem.BeanTypeExclusion;
 import io.quarkus.arc.deployment.staticmethods.InterceptedStaticMethodsTransformersRegisteredBuildItem;
 import io.quarkus.arc.processor.DotNames;
 import io.quarkus.datasource.common.runtime.DataSourceUtil;
+import io.quarkus.datasource.common.runtime.DatabaseKind;
 import io.quarkus.deployment.Capabilities;
 import io.quarkus.deployment.Capability;
 import io.quarkus.deployment.Feature;
@@ -95,14 +94,14 @@ import io.quarkus.deployment.builditem.ApplicationArchivesBuildItem;
 import io.quarkus.deployment.builditem.BytecodeRecorderConstantDefinitionBuildItem;
 import io.quarkus.deployment.builditem.BytecodeTransformerBuildItem;
 import io.quarkus.deployment.builditem.CombinedIndexBuildItem;
-import io.quarkus.deployment.builditem.DevServicesLauncherConfigResultBuildItem;
+import io.quarkus.deployment.builditem.DevServicesAdditionalConfigBuildItem;
 import io.quarkus.deployment.builditem.FeatureBuildItem;
 import io.quarkus.deployment.builditem.GeneratedClassBuildItem;
 import io.quarkus.deployment.builditem.HotDeploymentWatchedFileBuildItem;
 import io.quarkus.deployment.builditem.LaunchModeBuildItem;
 import io.quarkus.deployment.builditem.LiveReloadBuildItem;
 import io.quarkus.deployment.builditem.LogCategoryBuildItem;
-import io.quarkus.deployment.builditem.RunTimeConfigurationDefaultBuildItem;
+import io.quarkus.deployment.builditem.NativeImageFeatureBuildItem;
 import io.quarkus.deployment.builditem.ServiceStartBuildItem;
 import io.quarkus.deployment.builditem.SystemPropertyBuildItem;
 import io.quarkus.deployment.builditem.TransformedClassesBuildItem;
@@ -120,6 +119,7 @@ import io.quarkus.devconsole.spi.DevConsoleRuntimeTemplateInfoBuildItem;
 import io.quarkus.hibernate.orm.PersistenceUnit;
 import io.quarkus.hibernate.orm.deployment.integration.HibernateOrmIntegrationRuntimeConfiguredBuildItem;
 import io.quarkus.hibernate.orm.deployment.integration.HibernateOrmIntegrationStaticConfiguredBuildItem;
+import io.quarkus.hibernate.orm.deployment.spi.DatabaseKindDialectBuildItem;
 import io.quarkus.hibernate.orm.runtime.HibernateOrmRecorder;
 import io.quarkus.hibernate.orm.runtime.HibernateOrmRuntimeConfig;
 import io.quarkus.hibernate.orm.runtime.JPAConfig;
@@ -135,7 +135,9 @@ import io.quarkus.hibernate.orm.runtime.boot.xml.RecordableXmlMapping;
 import io.quarkus.hibernate.orm.runtime.cdi.QuarkusArcBeanContainer;
 import io.quarkus.hibernate.orm.runtime.devconsole.HibernateOrmDevConsoleCreateDDLSupplier;
 import io.quarkus.hibernate.orm.runtime.devconsole.HibernateOrmDevConsoleIntegrator;
+import io.quarkus.hibernate.orm.runtime.graal.DisableLoggingFeature;
 import io.quarkus.hibernate.orm.runtime.integration.HibernateOrmIntegrationStaticDescriptor;
+import io.quarkus.hibernate.orm.runtime.migration.MultiTenancyStrategy;
 import io.quarkus.hibernate.orm.runtime.proxies.PreGeneratedProxies;
 import io.quarkus.hibernate.orm.runtime.schema.SchemaManagementIntegrator;
 import io.quarkus.hibernate.orm.runtime.tenant.DataSourceTenantConnectionResolver;
@@ -168,6 +170,32 @@ public final class HibernateOrmProcessor {
 
     private static final String INTEGRATOR_SERVICE_FILE = "META-INF/services/org.hibernate.integrator.spi.Integrator";
 
+    @BuildStep(onlyIf = NativeOrNativeSourcesBuild.class)
+    NativeImageFeatureBuildItem nativeImageFeature() {
+        return new NativeImageFeatureBuildItem(DisableLoggingFeature.class);
+    }
+
+    @BuildStep
+    void registerHibernateOrmMetadataForCoreDialects(
+            BuildProducer<DatabaseKindDialectBuildItem> producer) {
+        producer.produce(new DatabaseKindDialectBuildItem(DatabaseKind.DB2,
+                "org.hibernate.dialect.DB297Dialect"));
+        producer.produce(new DatabaseKindDialectBuildItem(DatabaseKind.DERBY,
+                "org.hibernate.dialect.DerbyTenSevenDialect"));
+        producer.produce(new DatabaseKindDialectBuildItem(DatabaseKind.H2,
+                "io.quarkus.hibernate.orm.runtime.dialect.QuarkusH2Dialect"));
+        producer.produce(new DatabaseKindDialectBuildItem(DatabaseKind.MARIADB,
+                "org.hibernate.dialect.MariaDB106Dialect"));
+        producer.produce(new DatabaseKindDialectBuildItem(DatabaseKind.MSSQL,
+                "org.hibernate.dialect.SQLServer2016Dialect"));
+        producer.produce(new DatabaseKindDialectBuildItem(DatabaseKind.MYSQL,
+                "org.hibernate.dialect.MySQL8Dialect"));
+        producer.produce(new DatabaseKindDialectBuildItem(DatabaseKind.ORACLE,
+                "org.hibernate.dialect.Oracle12cDialect"));
+        producer.produce(new DatabaseKindDialectBuildItem(DatabaseKind.POSTGRESQL,
+                "io.quarkus.hibernate.orm.runtime.dialect.QuarkusPostgreSQL10Dialect"));
+    }
+
     @BuildStep
     void checkTransactionsSupport(Capabilities capabilities) {
         // JTA is necessary for blocking Hibernate ORM but not necessarily for Hibernate Reactive
@@ -180,13 +208,8 @@ public final class HibernateOrmProcessor {
     @BuildStep
     void includeArchivesHostingEntityPackagesInIndex(HibernateOrmConfig hibernateOrmConfig,
             BuildProducer<AdditionalApplicationArchiveMarkerBuildItem> additionalApplicationArchiveMarkers) {
-        if (hibernateOrmConfig.defaultPersistenceUnit.packages.isPresent()) {
-            for (String pakkage : hibernateOrmConfig.defaultPersistenceUnit.packages.get()) {
-                additionalApplicationArchiveMarkers
-                        .produce(new AdditionalApplicationArchiveMarkerBuildItem(pakkage.replace('.', '/')));
-            }
-        }
-        for (HibernateOrmConfigPersistenceUnit persistenceUnit : hibernateOrmConfig.persistenceUnits.values()) {
+        for (HibernateOrmConfigPersistenceUnit persistenceUnit : hibernateOrmConfig.getAllPersistenceUnitConfigsAsMap()
+                .values()) {
             if (persistenceUnit.packages.isPresent()) {
                 for (String pakkage : persistenceUnit.packages.get()) {
                     additionalApplicationArchiveMarkers
@@ -206,24 +229,9 @@ public final class HibernateOrmProcessor {
                 new HibernateOrmDevConsoleCreateDDLSupplier(PersistenceUnitUtil.DEFAULT_PERSISTENCE_UNIT_NAME), this.getClass(),
                 curateOutcomeBuildItem);
         runtimeInfoProducer.produce(devConsoleRuntimeTemplateInfoBuildItem);
-        if (config.defaultPersistenceUnit.datasource.isEmpty()) {
-            handleGenerateSqlForPu(runtimeInfoProducer, initialSQLGeneratorBuildItemBuildProducer,
-                    PersistenceUnitUtil.DEFAULT_PERSISTENCE_UNIT_NAME, DataSourceUtil.DEFAULT_DATASOURCE_NAME,
-                    curateOutcomeBuildItem);
-        } else {
-            handleGenerateSqlForPu(runtimeInfoProducer, initialSQLGeneratorBuildItemBuildProducer,
-                    PersistenceUnitUtil.DEFAULT_PERSISTENCE_UNIT_NAME, config.defaultPersistenceUnit.datasource.get(),
-                    curateOutcomeBuildItem);
-        }
-        for (Entry<String, HibernateOrmConfigPersistenceUnit> entry : config.persistenceUnits.entrySet()) {
-
-            if (entry.getValue().datasource.isEmpty()) {
-                handleGenerateSqlForPu(runtimeInfoProducer, initialSQLGeneratorBuildItemBuildProducer, entry.getKey(),
-                        DataSourceUtil.DEFAULT_DATASOURCE_NAME, curateOutcomeBuildItem);
-            } else {
-                handleGenerateSqlForPu(runtimeInfoProducer, initialSQLGeneratorBuildItemBuildProducer, entry.getKey(),
-                        entry.getValue().datasource.get(), curateOutcomeBuildItem);
-            }
+        for (Entry<String, HibernateOrmConfigPersistenceUnit> entry : config.getAllPersistenceUnitConfigsAsMap().entrySet()) {
+            handleGenerateSqlForPu(runtimeInfoProducer, initialSQLGeneratorBuildItemBuildProducer, entry.getKey(),
+                    entry.getValue().datasource.orElse(DataSourceUtil.DEFAULT_DATASOURCE_NAME), curateOutcomeBuildItem);
         }
     }
 
@@ -249,62 +257,41 @@ public final class HibernateOrmProcessor {
     @Consume(ServiceStartBuildItem.class)
     @BuildStep(onlyIf = IsDevelopment.class)
     void warnOfSchemaProblems(HibernateOrmConfig config, HibernateOrmRecorder recorder) {
-        if (config.defaultPersistenceUnit.validateInDevMode) {
-            recorder.doValidation(PersistenceUnitUtil.DEFAULT_PERSISTENCE_UNIT_NAME);
-        }
-        for (var e : config.persistenceUnits.entrySet()) {
+        for (var e : config.getAllPersistenceUnitConfigsAsMap().entrySet()) {
             if (e.getValue().validateInDevMode) {
                 recorder.doValidation(e.getKey());
             }
         }
-
     }
 
     @BuildStep(onlyIfNot = IsNormal.class)
-    void devServicesAutoGenerateByDefault(DevServicesLauncherConfigResultBuildItem devServicesResult,
-            List<JdbcDataSourceSchemaReadyBuildItem> schemaReadyBuildItems,
+    void devServicesAutoGenerateByDefault(List<JdbcDataSourceSchemaReadyBuildItem> schemaReadyBuildItems,
+            List<PersistenceUnitDescriptorBuildItem> persistenceUnitDescriptorBuildItems,
             HibernateOrmConfig config,
-            BuildProducer<RunTimeConfigurationDefaultBuildItem> runTimeConfigurationDefaultBuildItemBuildProducer) {
+            BuildProducer<DevServicesAdditionalConfigBuildItem> devServicesAdditionalConfigProducer) {
         Set<String> managedSources = schemaReadyBuildItems.stream().map(JdbcDataSourceSchemaReadyBuildItem::getDatasourceNames)
                 .collect(HashSet::new, Collection::addAll, Collection::addAll);
 
-        String dsName;
-        if (config.defaultPersistenceUnit.datasource.isEmpty()) {
-            dsName = "quarkus.datasource.username";
-        } else {
-            dsName = "quarkus.datasource." + config.defaultPersistenceUnit.datasource.get() + ".username";
-        }
-
-        if (!ConfigUtils.isPropertyPresent(dsName)) {
-            if (devServicesResult.getConfig().containsKey(dsName)
-                    && !managedSources.contains(DataSourceUtil.DEFAULT_DATASOURCE_NAME)) {
-                if (!ConfigUtils.isPropertyPresent("quarkus.hibernate-orm.database.generation")) {
-                    LOG.info(
-                            "Setting quarkus.hibernate-orm.database.generation=drop-and-create to initialize Dev Services managed database");
-                    runTimeConfigurationDefaultBuildItemBuildProducer.produce(new RunTimeConfigurationDefaultBuildItem(
-                            "quarkus.hibernate-orm.database.generation", "drop-and-create"));
-                }
-            }
-        }
-
-        for (Entry<String, HibernateOrmConfigPersistenceUnit> entry : config.persistenceUnits.entrySet()) {
-
-            Optional<String> ds = entry.getValue().datasource;
-            if (ds.isEmpty()) {
-                dsName = "quarkus.datasource.jdbc.url";
+        for (Entry<String, HibernateOrmConfigPersistenceUnit> entry : config.getAllPersistenceUnitConfigsAsMap().entrySet()) {
+            String propertyKeyIndicatingDataSourceConfigured;
+            Optional<String> dataSourceName = entry.getValue().datasource;
+            if (dataSourceName.isEmpty()) {
+                propertyKeyIndicatingDataSourceConfigured = "quarkus.datasource.username";
             } else {
-                dsName = "quarkus.datasource." + ds.get() + ".username";
+                propertyKeyIndicatingDataSourceConfigured = "quarkus.datasource." + dataSourceName.get() + ".username";
             }
 
-            if (!ConfigUtils.isPropertyPresent(dsName)) {
-                if (devServicesResult.getConfig().containsKey(dsName)
-                        && !managedSources.contains(ds.isEmpty() ? DataSourceUtil.DEFAULT_DATASOURCE_NAME : ds)) {
-                    String propertyName = "quarkus.hibernate-orm." + entry.getKey() + ".database.generation";
-                    if (!ConfigUtils.isPropertyPresent(propertyName)) {
-                        LOG.info("Setting " + propertyName + "=drop-and-create to initialize Dev Services managed database");
-                        runTimeConfigurationDefaultBuildItemBuildProducer
-                                .produce(new RunTimeConfigurationDefaultBuildItem(propertyName, "drop-and-create"));
-                    }
+            if (!managedSources.contains(dataSourceName.orElse(DataSourceUtil.DEFAULT_DATASOURCE_NAME))) {
+                String databaseGenerationPropertyKey = HibernateOrmRuntimeConfig.puPropertyKey(entry.getKey(),
+                        "database.generation");
+                if (!ConfigUtils.isPropertyPresent(propertyKeyIndicatingDataSourceConfigured)
+                        && !ConfigUtils.isPropertyPresent(databaseGenerationPropertyKey)) {
+                    String forcedValue = "drop-and-create";
+                    devServicesAdditionalConfigProducer
+                            .produce(new DevServicesAdditionalConfigBuildItem(propertyKeyIndicatingDataSourceConfigured,
+                                    databaseGenerationPropertyKey, forcedValue,
+                                    () -> LOG.infof("Setting %s=%s to initialize Dev Services managed database",
+                                            databaseGenerationPropertyKey, forcedValue)));
                 }
             }
         }
@@ -400,7 +387,8 @@ public final class HibernateOrmProcessor {
             BuildProducer<SystemPropertyBuildItem> systemProperties,
             BuildProducer<NativeImageResourceBuildItem> nativeImageResources,
             BuildProducer<HotDeploymentWatchedFileBuildItem> hotDeploymentWatchedFiles,
-            BuildProducer<PersistenceUnitDescriptorBuildItem> persistenceUnitDescriptors) {
+            BuildProducer<PersistenceUnitDescriptorBuildItem> persistenceUnitDescriptors,
+            List<DatabaseKindDialectBuildItem> dbKindMetadataBuildItems) {
 
         if (!hasEntities(jpaModel)) {
             // we can bail out early as there are no entities
@@ -417,6 +405,7 @@ public final class HibernateOrmProcessor {
                                     .getProperties().getProperty(AvailableSettings.MULTI_TENANT))),
                             null,
                             jpaModel.getXmlMappings(persistenceXmlDescriptorBuildItem.getDescriptor().getName()),
+                            Collections.emptyMap(),
                             false,
                             true));
         }
@@ -424,7 +413,8 @@ public final class HibernateOrmProcessor {
         if (impliedPU.shouldGenerateImpliedBlockingPersistenceUnit()) {
             handleHibernateORMWithNoPersistenceXml(hibernateOrmConfig, index, persistenceXmlDescriptors,
                     jdbcDataSources, applicationArchivesBuildItem, launchMode.getLaunchMode(), jpaModel, capabilities,
-                    systemProperties, nativeImageResources, hotDeploymentWatchedFiles, persistenceUnitDescriptors);
+                    systemProperties, nativeImageResources, hotDeploymentWatchedFiles, persistenceUnitDescriptors,
+                    dbKindMetadataBuildItems);
         }
     }
 
@@ -459,13 +449,8 @@ public final class HibernateOrmProcessor {
     public void contributeQuarkusConfigToJpaModel(
             BuildProducer<JpaModelPersistenceUnitContributionBuildItem> jpaModelPuContributions,
             HibernateOrmConfig hibernateOrmConfig) {
-        Map<String, HibernateOrmConfigPersistenceUnit> persistenceUnitConfigs = new TreeMap<>();
-        if (hibernateOrmConfig.defaultPersistenceUnit != null) {
-            persistenceUnitConfigs.put(PersistenceUnitUtil.DEFAULT_PERSISTENCE_UNIT_NAME,
-                    hibernateOrmConfig.defaultPersistenceUnit);
-        }
-        persistenceUnitConfigs.putAll(hibernateOrmConfig.persistenceUnits);
-        for (Entry<String, HibernateOrmConfigPersistenceUnit> entry : persistenceUnitConfigs.entrySet()) {
+        for (Entry<String, HibernateOrmConfigPersistenceUnit> entry : hibernateOrmConfig.getAllPersistenceUnitConfigsAsMap()
+                .entrySet()) {
             String name = entry.getKey();
             HibernateOrmConfigPersistenceUnit config = entry.getValue();
             jpaModelPuContributions.produce(new JpaModelPersistenceUnitContributionBuildItem(
@@ -838,7 +823,7 @@ public final class HibernateOrmProcessor {
     public void produceLoggingCategories(HibernateOrmConfig hibernateOrmConfig,
             BuildProducer<LogCategoryBuildItem> categories) {
         if (hibernateOrmConfig.log.bindParam || hibernateOrmConfig.log.bindParameters) {
-            categories.produce(new LogCategoryBuildItem("org.hibernate.type.descriptor.sql.BasicBinder", Level.TRACE));
+            categories.produce(new LogCategoryBuildItem("org.hibernate.type.descriptor.sql.BasicBinder", Level.TRACE, true));
         }
     }
 
@@ -909,7 +894,8 @@ public final class HibernateOrmProcessor {
             BuildProducer<SystemPropertyBuildItem> systemProperties,
             BuildProducer<NativeImageResourceBuildItem> nativeImageResources,
             BuildProducer<HotDeploymentWatchedFileBuildItem> hotDeploymentWatchedFiles,
-            BuildProducer<PersistenceUnitDescriptorBuildItem> persistenceUnitDescriptors) {
+            BuildProducer<PersistenceUnitDescriptorBuildItem> persistenceUnitDescriptors,
+            List<DatabaseKindDialectBuildItem> dbKindMetadataBuildItems) {
         if (!descriptors.isEmpty()) {
             if (hibernateOrmConfig.isAnyPropertySet() || !hibernateOrmConfig.persistenceUnits.isEmpty()) {
                 throw new ConfigurationException(
@@ -943,7 +929,7 @@ public final class HibernateOrmProcessor {
                     jpaModel.getXmlMappings(PersistenceUnitUtil.DEFAULT_PERSISTENCE_UNIT_NAME),
                     jdbcDataSources, applicationArchivesBuildItem, launchMode, capabilities,
                     systemProperties, nativeImageResources, hotDeploymentWatchedFiles, persistenceUnitDescriptors,
-                    storageEngineCollector);
+                    storageEngineCollector, dbKindMetadataBuildItems);
         } else if (!modelClassesAndPackagesForDefaultPersistenceUnit.isEmpty()
                 && (!hibernateOrmConfig.defaultPersistenceUnit.datasource.isPresent()
                         || DataSourceUtil.isDefault(hibernateOrmConfig.defaultPersistenceUnit.datasource.get()))
@@ -966,7 +952,7 @@ public final class HibernateOrmProcessor {
                     jpaModel.getXmlMappings(persistenceUnitEntry.getKey()),
                     jdbcDataSources, applicationArchivesBuildItem, launchMode, capabilities,
                     systemProperties, nativeImageResources, hotDeploymentWatchedFiles, persistenceUnitDescriptors,
-                    storageEngineCollector);
+                    storageEngineCollector, dbKindMetadataBuildItems);
         }
 
         if (storageEngineCollector.size() > 1) {
@@ -989,7 +975,8 @@ public final class HibernateOrmProcessor {
             BuildProducer<NativeImageResourceBuildItem> nativeImageResources,
             BuildProducer<HotDeploymentWatchedFileBuildItem> hotDeploymentWatchedFiles,
             BuildProducer<PersistenceUnitDescriptorBuildItem> persistenceUnitDescriptors,
-            Set<String> storageEngineCollector) {
+            Set<String> storageEngineCollector,
+            List<DatabaseKindDialectBuildItem> dbKindMetadataBuildItems) {
         Optional<JdbcDataSourceBuildItem> jdbcDataSource = findJdbcDataSource(persistenceUnitName, persistenceUnitConfig,
                 jdbcDataSources);
 
@@ -1002,14 +989,15 @@ public final class HibernateOrmProcessor {
             if (explicitDialect.isPresent()) {
                 dialect = explicitDialect.get();
             } else if (jdbcDataSource.isPresent()) {
-                dialect = Dialects.guessDialect(persistenceUnitName, jdbcDataSource.get().getDbKind());
+                dialect = Dialects.guessDialect(persistenceUnitName, jdbcDataSource.get().getDbKind(),
+                        dbKindMetadataBuildItems);
             } else {
                 throw new ConfigurationException(String.format(Locale.ROOT,
                         "The Hibernate ORM extension could not infer the dialect for persistence unit '%s'."
                                 + " When using database multi-tenancy, you must either configure a datasource for that persistence unit"
                                 + " (refer to https://quarkus.io/guides/datasource for guidance),"
                                 + " or set the dialect explicitly through property '"
-                                + HibernateOrmConfig.puPropertyKey(persistenceUnitName, "dialect") + "'.",
+                                + HibernateOrmRuntimeConfig.puPropertyKey(persistenceUnitName, "dialect") + "'.",
                         persistenceUnitName));
             }
 
@@ -1025,7 +1013,8 @@ public final class HibernateOrmProcessor {
             if (explicitDialect.isPresent()) {
                 dialect = explicitDialect.get();
             } else {
-                dialect = Dialects.guessDialect(persistenceUnitName, jdbcDataSource.get().getDbKind());
+                dialect = Dialects.guessDialect(persistenceUnitName, jdbcDataSource.get().getDbKind(),
+                        dbKindMetadataBuildItems);
             }
         }
 
@@ -1139,7 +1128,7 @@ public final class HibernateOrmProcessor {
                 } catch (RuntimeException e) {
                     throw new ConfigurationException(
                             "Unable to interpret path referenced in '"
-                                    + HibernateOrmConfig.puPropertyKey(persistenceUnitName, "sql-load-script") + "="
+                                    + HibernateOrmRuntimeConfig.puPropertyKey(persistenceUnitName, "sql-load-script") + "="
                                     + String.join(",", persistenceUnitConfig.sqlLoadScript.get())
                                     + "': " + e.getMessage());
                 }
@@ -1151,7 +1140,7 @@ public final class HibernateOrmProcessor {
                     //raise exception if explicit file is not present (i.e. not the default)
                     throw new ConfigurationException(
                             "Unable to find file referenced in '"
-                                    + HibernateOrmConfig.puPropertyKey(persistenceUnitName, "sql-load-script") + "="
+                                    + HibernateOrmRuntimeConfig.puPropertyKey(persistenceUnitName, "sql-load-script") + "="
                                     + String.join(",", persistenceUnitConfig.sqlLoadScript.get())
                                     + "'. Remove property or add file to your path.");
                 }
@@ -1210,6 +1199,7 @@ public final class HibernateOrmProcessor {
                         multiTenancyStrategy,
                         persistenceUnitConfig.multitenantSchemaDatasource.orElse(null),
                         xmlMappings,
+                        persistenceUnitConfig.unsupportedProperties,
                         false, false));
     }
 
@@ -1424,11 +1414,8 @@ public final class HibernateOrmProcessor {
     }
 
     private static boolean hasPackagesInQuarkusConfig(HibernateOrmConfig hibernateOrmConfig) {
-        if (hibernateOrmConfig.defaultPersistenceUnit.packages.isPresent()) {
-            return true;
-        }
-
-        for (HibernateOrmConfigPersistenceUnit persistenceUnitConfig : hibernateOrmConfig.persistenceUnits.values()) {
+        for (HibernateOrmConfigPersistenceUnit persistenceUnitConfig : hibernateOrmConfig.getAllPersistenceUnitConfigsAsMap()
+                .values()) {
             if (persistenceUnitConfig.packages.isPresent()) {
                 return true;
             }

@@ -11,7 +11,7 @@ include::./attributes.adoc[]
 
 `io.quarkus:quarkus-security` module contains the core Quarkus security classes.
 
-In most cases, it does not have to be added directly to your project's build file as it is already provided by all of the security extensions.
+In most cases, it does not have to be added directly to your project's build file as it is already provided by all the security extensions.
 However, if you need to write your own custom security code (for example, register a <<jaxrs-security-context, Custom JAX-RS SecurityContext>>) or use <<bouncy-castle, BouncyCastle>> libraries, then please make sure it is included:
 
 [source,xml,role="primary asciidoc-tabs-target-sync-cli asciidoc-tabs-target-sync-maven"]
@@ -72,15 +72,15 @@ public class CustomAwareJWTAuthMechanism implements HttpAuthenticationMechanism 
 
 == Dealing with more than one HttpAuthenticationMechanism
 
-More than one `HttpAuthenticationMechanism` can be combined, for example, the built-in `Basic` or `JWT` mechanism provided by `quarkus-smallrye-jwt` has to be used to verify the service clients credentials passed as the HTTP `Authorization` `Basic` or `Bearer` scheme values while the `Authorization Code` mechanism provided by `quarkus-oidc` has to be used to authenticate the users with `Keycloak` or other `OpenId Connect` providers.
+More than one `HttpAuthenticationMechanism` can be combined, for example, the built-in `Basic` or `JWT` mechanism provided by `quarkus-smallrye-jwt` has to be used to verify the service clients credentials passed as the HTTP `Authorization` `Basic` or `Bearer` scheme values while the `Authorization Code` mechanism provided by `quarkus-oidc` has to be used to authenticate the users with Keycloak or other OpenID Connect providers.
 
 In such cases the mechanisms are asked to verify the credentials in turn until a `SecurityIdentity` is created. The mechanisms are sorted in the descending order using their priority. `Basic` authentication mechanism has the highest priority of `2000`, followed by the `Authorization Code` one with the priority of `1001`, with all other mechanisms provided by Quarkus having the priority of `1000`.
 
-If no credentials are provided then the mechanism specific challenge is created, for example, `401` status is returned by either `Basic` or `JWT` mechanisms, URL redirecting the user to the `OpenId Connect` provider is returned by `quarkus-oidc`, etc.
+If no credentials are provided then the mechanism specific challenge is created, for example, `401` status is returned by either `Basic` or `JWT` mechanisms, URL redirecting the user to the OpenID Connect provider is returned by `quarkus-oidc`, etc.
 
 So if `Basic` and `Authorization Code` mechanisms are combined then `401` will be returned if no credentials are provided and if `JWT` and `Authorization Code` mechanisms are combined then a redirect URL will be returned.
 
-In some cases such a default logic of selecting the challenge is exactly what is required by a given application but sometimes it may not meet the requirements. In such cases (or indeed in other similar cases where you'd like to change the order in which the mechanisms are asked to handle the current authentication or challenge request), you can create a custom mechanism and choose which mechanism should create a challenge, for example:
+In some cases such a default logic of selecting the challenge is exactly what is required by a given application, but sometimes it may not meet the requirements. In such cases (or indeed in other similar cases where you'd like to change the order in which the mechanisms are asked to handle the current authentication or challenge request), you can create a custom mechanism and choose which mechanism should create a challenge, for example:
 
 [source,java]
 ----
@@ -223,6 +223,49 @@ public class RolesAugmentor implements SecurityIdentityAugmentor {
 If more than one custom `SecurityIdentityAugmentor` is registered then they will be considered equal candidates and invoked in random order.
 You can enforce the order by implementing a default `SecurityIdentityAugmentor#priority` method. Augmentors with higher priorities will be invoked first.
 ====
+
+By default, the request context is not activated when augmenting the security identity, this means that if you want to use for example Hibernate
+that mandates a request context, you will have a `javax.enterprise.context.ContextNotActiveException`.
+
+The solution is to activate the request context, the following example shows how to get the roles from an Hibernate with Panache `UserRoleEntity`.
+
+[source,java]
+----
+import io.quarkus.security.identity.AuthenticationRequestContext;
+import io.quarkus.security.identity.SecurityIdentity;
+import io.quarkus.security.identity.SecurityIdentityAugmentor;
+import io.quarkus.security.runtime.QuarkusSecurityIdentity;
+import io.smallrye.mutiny.Uni;
+
+import javax.enterprise.context.ApplicationScoped;
+import javax.enterprise.context.control.ActivateRequestContext;
+import java.util.function.Supplier;
+
+@ApplicationScoped
+public class RolesAugmentor implements SecurityIdentityAugmentor {
+    @Override
+    public Uni<SecurityIdentity> augment(SecurityIdentity identity, AuthenticationRequestContext context) {
+        if(identity.isAnonymous()) {
+            return Uni.createFrom().item(identity);
+        }
+
+        // Hibernate ORM is blocking
+        return context.runBlocking(build(identity));
+    }
+
+    @ActivateRequestContext // Will activate the request context
+    Supplier<SecurityIdentity> build(SecurityIdentity identity) {
+        QuarkusSecurityIdentity.Builder builder = QuarkusSecurityIdentity.builder(identity);
+        String user = identity.getPrincipal().getName();
+
+        UserRoleEntity.<userRoleEntity>streamAll()
+                .filter(role -> user.equals(role.user))
+                .forEach(role -> builder.addRole(role.role));
+
+        return builder::build;
+    }
+}
+----
 
 [[jaxrs-security-context]]
 == Custom JAX-RS SecurityContext
@@ -482,6 +525,40 @@ keytool -genkey -alias server -keyalg RSA -keystore server-keystore.jks -keysize
 [NOTE]
 ====
 `BCFIPSJSSE` provider option is currently not supported in native image.
+====
+
+[[sun-pkcs11]]
+=== SunPKCS11
+
+`SunPKCS11` provider provides a bridge to specific `PKCS#11` implementations such as cryptographic smartcards and other Hardware Security Modules, Network Security Services in FIPS mode, etc.
+
+Typically, in order to work with `SunPKCS11`, one needs to install a `PKCS#11` implementation, generate a configuration which usually refers to a shared library, token slot, etc and write the following Java code:
+
+[source,java]
+----
+import java.security.Provider;
+import java.security.Security;
+
+String configuration = "pkcs11.cfg"
+
+Provider sunPkcs11 = Security.getProvider("SunPKCS11");
+Provider pkcsImplementation = sunPkcs11.configure(configuration);
+// or prepare configuration in the code or read it from the file such as "pkcs11.cfg" and do
+// sunPkcs11.configure("--" + configuration);
+Security.addProvider(pkcsImplementation);
+----
+
+In Quarkus you can achieve the same at the configuration level only without having to modify the code, for example:
+
+[source,properties]
+----
+quarkus.security.security-providers=SunPKCS11
+quarkus.security.security-provider-config.SunPKCS11=pkcs11.cfg
+----
+
+[NOTE]
+====
+Note that while accessing the `SunPKCS11` bridge provider is supported in native image, configuring `SunPKCS11` is currently not supported in native image at the Quarkus level.
 ====
 
 == Reactive Security

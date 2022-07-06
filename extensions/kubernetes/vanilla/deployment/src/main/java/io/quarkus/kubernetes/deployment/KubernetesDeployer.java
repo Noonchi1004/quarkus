@@ -37,6 +37,7 @@ import io.fabric8.kubernetes.client.utils.ApiVersionUtil;
 import io.fabric8.openshift.api.model.Route;
 import io.fabric8.openshift.client.OpenShiftClient;
 import io.quarkus.container.image.deployment.ContainerImageCapabilitiesUtil;
+import io.quarkus.container.image.deployment.ContainerImageConfig;
 import io.quarkus.container.spi.ContainerImageInfoBuildItem;
 import io.quarkus.deployment.Capabilities;
 import io.quarkus.deployment.Capability;
@@ -64,19 +65,24 @@ public class KubernetesDeployer {
     public void selectDeploymentTarget(ContainerImageInfoBuildItem containerImageInfo,
             EnabledKubernetesDeploymentTargetsBuildItem targets,
             Capabilities capabilities,
-            BuildProducer<SelectedKubernetesDeploymentTargetBuildItem> selectedDeploymentTarget) {
+            ContainerImageConfig containerImageConfig,
+            BuildProducer<SelectedKubernetesDeploymentTargetBuildItem> selectedDeploymentTarget,
+            BuildProducer<PreventImplicitContainerImagePushBuildItem> preventImplicitContainerImagePush) {
 
         Optional<String> activeContainerImageCapability = ContainerImageCapabilitiesUtil
                 .getActiveContainerImageCapability(capabilities);
 
         if (activeContainerImageCapability.isEmpty()) {
-            // we can't thrown an exception here, because it could prevent the Kubernetes resources from being generated
+            // we can't throw an exception here, because it could prevent the Kubernetes resources from being generated
             return;
         }
 
         final DeploymentTargetEntry selectedTarget = determineDeploymentTarget(
-                containerImageInfo, targets, activeContainerImageCapability.get());
+                containerImageInfo, targets, activeContainerImageCapability.get(), containerImageConfig);
         selectedDeploymentTarget.produce(new SelectedKubernetesDeploymentTargetBuildItem(selectedTarget));
+        if (MINIKUBE.equals(selectedTarget.getName())) {
+            preventImplicitContainerImagePush.produce(new PreventImplicitContainerImagePushBuildItem());
+        }
     }
 
     @BuildStep
@@ -135,14 +141,14 @@ public class KubernetesDeployer {
      * The selection is done as follows:
      *
      * If there is no target deployment at all, just use vanilla Kubernetes. This will happen in cases where the user does not
-     * select
-     * a deployment target and no extensions that specify one are are present
+     * select a deployment target and no extension that specify one is present.
      *
-     * If the user specifies deployment targets, pick the first one
+     * If the user specifies deployment targets, pick the first one.
      */
     private DeploymentTargetEntry determineDeploymentTarget(
             ContainerImageInfoBuildItem containerImageInfo,
-            EnabledKubernetesDeploymentTargetsBuildItem targets, String activeContainerImageCapability) {
+            EnabledKubernetesDeploymentTargetsBuildItem targets, String activeContainerImageCapability,
+            ContainerImageConfig containerImageConfig) {
         final DeploymentTargetEntry selectedTarget;
 
         boolean checkForMissingRegistry = true;
@@ -180,6 +186,8 @@ public class KubernetesDeployer {
             }
 
         } else if (MINIKUBE.equals(selectedTarget.getName())) {
+            checkForMissingRegistry = false;
+        } else if (containerImageConfig.isPushExplicitlyDisabled()) {
             checkForMissingRegistry = false;
         }
 

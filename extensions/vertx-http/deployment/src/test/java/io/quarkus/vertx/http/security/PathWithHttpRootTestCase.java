@@ -25,11 +25,11 @@ public class PathWithHttpRootTestCase {
     private static final String APP_PROPS = "" +
             "# Add your application.properties here, if applicable.\n" +
             "quarkus.http.root-path=/root\n" +
-            "quarkus.http.auth.permission.authenticated.paths=/admin\n" +
+            "quarkus.http.auth.permission.authenticated.paths=admin\n" +
             "quarkus.http.auth.permission.authenticated.policy=authenticated\n";
 
     @RegisterExtension
-    static QuarkusUnitTest test = new QuarkusUnitTest().setArchiveProducer(new Supplier<JavaArchive>() {
+    static QuarkusUnitTest test = new QuarkusUnitTest().setArchiveProducer(new Supplier<>() {
         @Override
         public JavaArchive get() {
             return ShrinkWrap.create(JavaArchive.class)

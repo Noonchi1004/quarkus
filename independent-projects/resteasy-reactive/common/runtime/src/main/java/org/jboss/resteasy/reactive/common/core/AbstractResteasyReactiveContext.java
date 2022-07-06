@@ -51,8 +51,7 @@ public abstract class AbstractResteasyReactiveContext<T extends AbstractResteasy
     }
 
     public synchronized void resume(Throwable throwable) {
-        handleException(throwable);
-        resume((Executor) null);
+        resume(throwable, false);
     }
 
     public synchronized void resume(Throwable throwable, boolean keepTarget) {
@@ -138,7 +137,7 @@ public abstract class AbstractResteasyReactiveContext<T extends AbstractResteasy
                 int pos = position;
                 position++; //increment before, as reset may reset it to zero
                 try {
-                    handlers[pos].handle((T) this);
+                    invokeHandler(pos);
                     if (suspended) {
                         synchronized (this) {
                             // as running is not volatile but instead read from inside the same monitor,
@@ -213,6 +212,10 @@ public abstract class AbstractResteasyReactiveContext<T extends AbstractResteasy
 
             }
         }
+    }
+
+    protected void invokeHandler(int pos) throws Exception {
+        handlers[pos].handle((T) this);
     }
 
     protected void beginAsyncProcessing() {
@@ -299,13 +302,7 @@ public abstract class AbstractResteasyReactiveContext<T extends AbstractResteasy
      * a response result and switch to the abort chain
      */
     public void handleException(Throwable t) {
-        if (abortHandlerChainStarted) {
-            handleUnrecoverableError(unwrapException(t));
-        } else {
-            this.throwable = unwrapException(t);
-            abortHandlerChainStarted = true;
-            restart(abortHandlerChain);
-        }
+        handleException(t, false);
     }
 
     public void handleException(Throwable t, boolean keepSameTarget) {

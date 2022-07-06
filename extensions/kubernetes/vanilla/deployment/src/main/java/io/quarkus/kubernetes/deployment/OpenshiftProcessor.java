@@ -25,7 +25,7 @@ import io.dekorate.kubernetes.decorator.ApplicationContainerDecorator;
 import io.dekorate.kubernetes.decorator.ApplyImagePullPolicyDecorator;
 import io.dekorate.kubernetes.decorator.RemoveFromSelectorDecorator;
 import io.dekorate.kubernetes.decorator.RemoveLabelDecorator;
-import io.dekorate.openshift.decorator.ApplyReplicasDecorator;
+import io.dekorate.openshift.decorator.ApplyReplicasToDeploymentConfigDecorator;
 import io.dekorate.project.Project;
 import io.dekorate.s2i.config.S2iBuildConfig;
 import io.dekorate.s2i.config.S2iBuildConfigBuilder;
@@ -67,6 +67,7 @@ public class OpenshiftProcessor {
     private static final int OPENSHIFT_PRIORITY = DEFAULT_PRIORITY;
     private static final String OPENSHIFT_INTERNAL_REGISTRY = "image-registry.openshift-image-registry.svc:5000";
     private static final String DOCKERIO_REGISTRY = "docker.io";
+    private static final String OPENSHIFT_V3_APP = "app";
 
     @BuildStep
     public void checkOpenshift(ApplicationInfoBuildItem applicationInfo, OpenshiftConfig config,
@@ -95,7 +96,7 @@ public class OpenshiftProcessor {
             DeploymentResourceKind deploymentResourceKind = openshiftConfig.getDeploymentResourceKind();
             if (deploymentResourceKind != DeploymentResourceKind.DeploymentConfig) {
                 if (openshiftConfig.isOpenshiftBuildEnabled(containerImageConfig, capabilities)) {
-                    // Images stored in internal openshift registry use the following patttern:
+                    // Images stored in internal openshift registry use the following pattern:
                     // 'image-registry.openshift-image-registry.svc:5000/{{ project name}}/{{ image name }}: {{image version }}.
                     // So, we need warn users if group does not match currently selected project.
                     containerImageRegistry.produce(new FallbackContainerImageRegistryBuildItem(OPENSHIFT_INTERNAL_REGISTRY));
@@ -132,7 +133,7 @@ public class OpenshiftProcessor {
         KubernetesCommonHelper.combinePorts(ports, config).values().forEach(value -> {
             result.add(new ConfiguratorBuildItem(new AddPortToOpenshiftConfig(value)));
         });
-        result.add(new ConfiguratorBuildItem(new ApplyExpositionConfigurator(config.route)));
+        result.add(new ConfiguratorBuildItem(new ApplyRouteExpositionConfigurator(config.route)));
 
         // Handle remote debug configuration for container ports
         if (config.remoteDebug.enabled) {
@@ -151,6 +152,7 @@ public class OpenshiftProcessor {
             image.map(ContainerImageInfoBuildItem::getGroup).ifPresent(g -> {
                 result.add(new ConfiguratorBuildItem(new ApplyImageGroupConfigurator(g)));
             });
+
         }
         return result;
     }
@@ -175,9 +177,15 @@ public class OpenshiftProcessor {
             Optional<KubernetesHealthReadinessPathBuildItem> readinessPath,
             List<KubernetesRoleBuildItem> roles,
             List<KubernetesRoleBindingBuildItem> roleBindings,
-            Optional<CustomProjectRootBuildItem> customProjectRoot) {
+            Optional<CustomProjectRootBuildItem> customProjectRoot,
+            List<KubernetesDeploymentTargetBuildItem> targets) {
 
         List<DecoratorBuildItem> result = new ArrayList<>();
+        if (!targets.stream().filter(KubernetesDeploymentTargetBuildItem::isEnabled)
+                .anyMatch(t -> OPENSHIFT.equals(t.getName()))) {
+            return result;
+        }
+
         String name = ResourceNameUtil.getResourceName(config, applicationInfo);
 
         Optional<Project> project = KubernetesCommonHelper.createProject(applicationInfo, customProjectRoot, outputTarget,
@@ -190,7 +198,9 @@ public class OpenshiftProcessor {
         if (config.flavor == v3) {
             //Openshift 3.x doesn't recognize 'app.kubernetes.io/name', it uses 'app' instead.
             //The decorator will be applied even on non-openshift resources is it may affect for example: knative
-            result.add(new DecoratorBuildItem(new AddLabelDecorator(name, "app", name)));
+            if (labels.stream().noneMatch(l -> l.getKey().equals(OPENSHIFT_V3_APP))) {
+                result.add(new DecoratorBuildItem(new AddLabelDecorator(name, OPENSHIFT_V3_APP, name)));
+            }
 
             // The presence of optional is causing issues in OCP 3.11, so we better remove them.
             // The following 4 decorator will set the optional property to null, so that it won't make it into the file.
@@ -215,10 +225,11 @@ public class OpenshiftProcessor {
 
         if (config.getReplicas() != 1) {
             // This only affects DeploymentConfig
-            result.add(new DecoratorBuildItem(OPENSHIFT, new ApplyReplicasDecorator(name, config.getReplicas())));
+            result.add(new DecoratorBuildItem(OPENSHIFT,
+                    new ApplyReplicasToDeploymentConfigDecorator(name, config.getReplicas())));
             // This only affects Deployment
             result.add(new DecoratorBuildItem(OPENSHIFT,
-                    new io.dekorate.kubernetes.decorator.ApplyReplicasDecorator(name, config.getReplicas())));
+                    new io.dekorate.kubernetes.decorator.ApplyReplicasToDeploymentDecorator(name, config.getReplicas())));
             // This only affects StatefulSet
             result.add(new DecoratorBuildItem(OPENSHIFT, new ApplyReplicasToStatefulSetDecorator(name, config.getReplicas())));
         }
@@ -226,8 +237,22 @@ public class OpenshiftProcessor {
         image.ifPresent(i -> {
             result.add(new DecoratorBuildItem(OPENSHIFT, new ApplyContainerImageDecorator(name, i.getImage())));
         });
+        if ((!capabilities.isPresent(Capability.CONTAINER_IMAGE_S2I) && !capabilities.isPresent(Capability.OPENSHIFT))
+                || (capabilities.isPresent(Capability.OPENSHIFT) && !(capabilities.isPresent(Capability.CONTAINER_IMAGE_S2I)
+                        || capabilities.isPresent(Capability.CONTAINER_IMAGE_OPENSHIFT)))) {
+            result.add(new DecoratorBuildItem(OPENSHIFT, new RemoveDeploymentTriggerDecorator()));
+        }
+
+        config.getContainerName().ifPresent(containerName -> {
+            result.add(new DecoratorBuildItem(OPENSHIFT, new ChangeContainerNameDecorator(containerName)));
+            result.add(new DecoratorBuildItem(OPENSHIFT, new ChangeContainerNameInDeploymentTriggerDecorator(containerName)));
+        });
+
         result.add(new DecoratorBuildItem(OPENSHIFT, new ApplyImagePullPolicyDecorator(name, config.getImagePullPolicy())));
-        result.add(new DecoratorBuildItem(OPENSHIFT, new AddLabelDecorator(name, OPENSHIFT_APP_RUNTIME, QUARKUS)));
+
+        if (labels.stream().noneMatch(l -> l.getKey().equals(OPENSHIFT_APP_RUNTIME))) {
+            result.add(new DecoratorBuildItem(OPENSHIFT, new AddLabelDecorator(name, OPENSHIFT_APP_RUNTIME, QUARKUS)));
+        }
 
         Stream.concat(config.convertToBuildItems().stream(),
                 envs.stream().filter(e -> e.getTarget() == null || OPENSHIFT.equals(e.getTarget()))).forEach(e -> {

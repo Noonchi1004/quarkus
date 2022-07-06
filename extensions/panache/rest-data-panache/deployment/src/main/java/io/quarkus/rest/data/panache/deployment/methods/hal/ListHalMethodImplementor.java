@@ -3,6 +3,7 @@ package io.quarkus.rest.data.panache.deployment.methods.hal;
 import static io.quarkus.gizmo.MethodDescriptor.ofMethod;
 import static io.quarkus.rest.data.panache.deployment.utils.PaginationImplementor.DEFAULT_PAGE_INDEX;
 import static io.quarkus.rest.data.panache.deployment.utils.PaginationImplementor.DEFAULT_PAGE_SIZE;
+import static io.quarkus.rest.data.panache.deployment.utils.SignatureMethodCreator.ofType;
 
 import java.util.List;
 
@@ -16,6 +17,7 @@ import io.quarkus.gizmo.FieldDescriptor;
 import io.quarkus.gizmo.MethodCreator;
 import io.quarkus.gizmo.ResultHandle;
 import io.quarkus.gizmo.TryBlock;
+import io.quarkus.hal.HalCollectionWrapper;
 import io.quarkus.panache.common.Page;
 import io.quarkus.panache.common.Sort;
 import io.quarkus.rest.data.panache.RestDataResource;
@@ -23,10 +25,9 @@ import io.quarkus.rest.data.panache.deployment.Constants;
 import io.quarkus.rest.data.panache.deployment.ResourceMetadata;
 import io.quarkus.rest.data.panache.deployment.properties.ResourceProperties;
 import io.quarkus.rest.data.panache.deployment.utils.PaginationImplementor;
-import io.quarkus.rest.data.panache.deployment.utils.ResponseImplementor;
+import io.quarkus.rest.data.panache.deployment.utils.SignatureMethodCreator;
 import io.quarkus.rest.data.panache.deployment.utils.SortImplementor;
 import io.quarkus.rest.data.panache.deployment.utils.UniImplementor;
-import io.quarkus.rest.data.panache.runtime.hal.HalCollectionWrapper;
 import io.smallrye.mutiny.Uni;
 
 public final class ListHalMethodImplementor extends HalMethodImplementor {
@@ -50,7 +51,7 @@ public final class ListHalMethodImplementor extends HalMethodImplementor {
      * Generate HAL JAX-RS GET method.
      *
      * The RESTEasy Classic version exposes {@link RestDataResource#list(Page, Sort)} via HAL JAX-RS method.
-     * Generated pseudo-code with enabled pagination is shown below. If pagination is disabled pageIndex and pageSize
+     * Generated pseudocode with enabled pagination is shown below. If pagination is disabled pageIndex and pageSize
      * query parameters are skipped and null {@link Page} instance is used.
      *
      * <pre>
@@ -124,8 +125,8 @@ public final class ListHalMethodImplementor extends HalMethodImplementor {
     private void implementPaged(ClassCreator classCreator, ResourceMetadata resourceMetadata,
             ResourceProperties resourceProperties, FieldDescriptor resourceField) {
         // Method parameters: sort strings, page index, page size, uri info
-        MethodCreator methodCreator = classCreator.getMethodCreator(METHOD_NAME,
-                isNotReactivePanache() ? Response.class : Uni.class,
+        MethodCreator methodCreator = SignatureMethodCreator.getMethodCreator(METHOD_NAME, classCreator,
+                isNotReactivePanache() ? ofType(Response.class) : ofType(Uni.class, resourceMetadata.getEntityType()),
                 List.class, int.class, int.class, UriInfo.class);
 
         // Add method annotations
@@ -190,15 +191,16 @@ public final class ListHalMethodImplementor extends HalMethodImplementor {
 
         ResultHandle wrapper = wrapHalEntities(body, entities, resourceMetadata.getEntityType(),
                 resourceProperties.getHalCollectionName());
+
         body.invokeVirtualMethod(
                 ofMethod(HalCollectionWrapper.class, "addLinks", void.class, Link[].class), wrapper, links);
-        body.returnValue(ResponseImplementor.ok(body, wrapper, links));
+        body.returnValue(responseImplementor.ok(body, wrapper, links));
     }
 
     private void implementNotPaged(ClassCreator classCreator, ResourceMetadata resourceMetadata,
             ResourceProperties resourceProperties, FieldDescriptor resourceFieldDescriptor) {
-        MethodCreator methodCreator = classCreator.getMethodCreator(METHOD_NAME,
-                isNotReactivePanache() ? Response.class : Uni.class,
+        MethodCreator methodCreator = SignatureMethodCreator.getMethodCreator(METHOD_NAME, classCreator,
+                isNotReactivePanache() ? ofType(Response.class) : ofType(Uni.class, resourceMetadata.getEntityType()),
                 List.class);
 
         // Add method annotations
@@ -237,6 +239,6 @@ public final class ListHalMethodImplementor extends HalMethodImplementor {
             ResultHandle entities) {
         ResultHandle wrapper = wrapHalEntities(body, entities, resourceMetadata.getEntityType(),
                 resourceProperties.getHalCollectionName());
-        body.returnValue(ResponseImplementor.ok(body, wrapper));
+        body.returnValue(responseImplementor.ok(body, wrapper));
     }
 }

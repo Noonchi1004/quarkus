@@ -8,9 +8,11 @@ import io.quarkus.arc.processor.ObserverTransformer.ObserverTransformation;
 import io.quarkus.arc.processor.ObserverTransformer.TransformationContext;
 import io.quarkus.gizmo.MethodCreator;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.ListIterator;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
 import javax.enterprise.event.Reception;
@@ -25,6 +27,7 @@ import org.jboss.jandex.DotName;
 import org.jboss.jandex.MethodInfo;
 import org.jboss.jandex.MethodParameterInfo;
 import org.jboss.jandex.Type;
+import org.jboss.jandex.TypeVariable;
 import org.jboss.logging.Logger;
 
 /**
@@ -48,14 +51,24 @@ public class ObserverInfo implements InjectionTargetInfo {
         } else {
             priority = ObserverMethod.DEFAULT_PRIORITY;
         }
+
+        Type observedType = observerMethod.parameterType(eventParameter.position());
+        if (Types.containsTypeVariable(observedType)) {
+            Map<TypeVariable, Type> resolvedTypeVariables = Types
+                    .resolvedTypeVariables(declaringBean.getImplClazz(), declaringBean.getDeployment())
+                    .getOrDefault(observerMethod.declaringClass(), Collections.emptyMap());
+            observedType = Types.resolveTypeParam(observedType, resolvedTypeVariables,
+                    declaringBean.getDeployment().getBeanArchiveIndex());
+        }
+
         return create(null, declaringBean.getDeployment(), declaringBean.getTarget().get().asClass().name(), declaringBean,
                 observerMethod, injection,
                 eventParameter,
-                observerMethod.parameters().get(eventParameter.position()),
+                observedType,
                 initQualifiers(declaringBean.getDeployment(), observerMethod, eventParameter),
                 initReception(isAsync, declaringBean.getDeployment(), observerMethod),
                 initTransactionPhase(isAsync, declaringBean.getDeployment(), observerMethod), isAsync, priority, transformers,
-                buildContext, jtaCapabilities, null);
+                buildContext, jtaCapabilities, null, Collections.emptyMap());
     }
 
     static ObserverInfo create(String id, BeanDeployment beanDeployment, DotName beanClass, BeanInfo declaringBean,
@@ -63,7 +76,7 @@ public class ObserverInfo implements InjectionTargetInfo {
             MethodParameterInfo eventParameter, Type observedType, Set<AnnotationInstance> qualifiers, Reception reception,
             TransactionPhase transactionPhase, boolean isAsync, int priority,
             List<ObserverTransformer> transformers, BuildContext buildContext, boolean jtaCapabilities,
-            Consumer<MethodCreator> notify) {
+            Consumer<MethodCreator> notify, Map<String, Object> params) {
 
         if (!transformers.isEmpty()) {
             // Transform attributes if needed
@@ -109,7 +122,7 @@ public class ObserverInfo implements InjectionTargetInfo {
                     info, transactionPhase);
         }
         return new ObserverInfo(id, beanDeployment, beanClass, declaringBean, observerMethod, injection, eventParameter,
-                isAsync, priority, reception, transactionPhase, observedType, qualifiers, notify);
+                isAsync, priority, reception, transactionPhase, observedType, qualifiers, notify, params);
     }
 
     private final String id;
@@ -144,11 +157,13 @@ public class ObserverInfo implements InjectionTargetInfo {
 
     private final Consumer<MethodCreator> notify;
 
+    private final Map<String, Object> params;
+
     ObserverInfo(String id, BeanDeployment beanDeployment, DotName beanClass, BeanInfo declaringBean, MethodInfo observerMethod,
             Injection injection,
             MethodParameterInfo eventParameter,
             boolean isAsync, int priority, Reception reception, TransactionPhase transactionPhase,
-            Type observedType, Set<AnnotationInstance> qualifiers, Consumer<MethodCreator> notify) {
+            Type observedType, Set<AnnotationInstance> qualifiers, Consumer<MethodCreator> notify, Map<String, Object> params) {
         this.id = id;
         this.beanDeployment = beanDeployment;
         this.beanClass = beanClass;
@@ -164,6 +179,7 @@ public class ObserverInfo implements InjectionTargetInfo {
         this.observedType = observedType;
         this.qualifiers = qualifiers;
         this.notify = notify;
+        this.params = params;
     }
 
     @Override
@@ -258,6 +274,10 @@ public class ObserverInfo implements InjectionTargetInfo {
         return notify;
     }
 
+    Map<String, Object> getParams() {
+        return params;
+    }
+
     void init(List<Throwable> errors) {
         if (injection != null) {
             for (InjectionPointInfo injectionPoint : injection.injectionPoints) {
@@ -293,7 +313,7 @@ public class ObserverInfo implements InjectionTargetInfo {
         Set<AnnotationInstance> qualifiers = new HashSet<>();
         for (AnnotationInstance annotation : getParameterAnnotations(beanDeployment, observerMethod,
                 eventParameter.position())) {
-            beanDeployment.extractQualifiers(annotation).forEach(qualifiers::add);
+            qualifiers.addAll(beanDeployment.extractQualifiers(annotation));
         }
         return qualifiers;
     }
@@ -320,7 +340,7 @@ public class ObserverInfo implements InjectionTargetInfo {
 
     int initEventMetadataParam(MethodInfo observerMethod) {
         if (observerMethod != null) {
-            for (ListIterator<Type> iterator = observerMethod.parameters().listIterator(); iterator.hasNext();) {
+            for (ListIterator<Type> iterator = observerMethod.parameterTypes().listIterator(); iterator.hasNext();) {
                 if (iterator.next().name().equals(DotNames.EVENT_METADATA)) {
                     return iterator.previousIndex();
                 }

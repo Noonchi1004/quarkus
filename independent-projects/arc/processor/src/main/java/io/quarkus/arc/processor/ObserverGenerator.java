@@ -118,7 +118,7 @@ public class ObserverGenerator extends AbstractGenerator {
             sigBuilder.append(observer.getObserverMethod().name())
                     .append(UNDERSCORE)
                     .append(observer.getObserverMethod().returnType().name().toString());
-            for (org.jboss.jandex.Type paramType : observer.getObserverMethod().parameters()) {
+            for (org.jboss.jandex.Type paramType : observer.getObserverMethod().parameterTypes()) {
                 sigBuilder.append(paramType.name().toString());
             }
             sigBuilder.append(observer.getDeclaringBean().getIdentifier());
@@ -298,7 +298,7 @@ public class ObserverGenerator extends AbstractGenerator {
                     .append("#")
                     .append(observer.getObserverMethod().name())
                     .append("(")
-                    .append(observer.getObserverMethod().parameters().stream().map(Object::toString)
+                    .append(observer.getObserverMethod().parameterTypes().stream().map(Object::toString)
                             .collect(Collectors.joining(",")))
                     .append(")]");
 
@@ -401,10 +401,10 @@ public class ObserverGenerator extends AbstractGenerator {
         }
 
         // Collect all method arguments
-        ResultHandle[] referenceHandles = new ResultHandle[observer.getObserverMethod().parameters().size()];
+        ResultHandle[] referenceHandles = new ResultHandle[observer.getObserverMethod().parametersCount()];
         int eventParamPosition = observer.getEventParameter().position();
         Iterator<InjectionPointInfo> injectionPointsIterator = observer.getInjection().injectionPoints.iterator();
-        for (int i = 0; i < observer.getObserverMethod().parameters().size(); i++) {
+        for (int i = 0; i < observer.getObserverMethod().parametersCount(); i++) {
             if (i == eventParamPosition) {
                 referenceHandles[i] = notify.invokeInterfaceMethod(MethodDescriptors.EVENT_CONTEXT_GET_EVENT,
                         notify.getMethodParam(0));
@@ -434,7 +434,7 @@ public class ObserverGenerator extends AbstractGenerator {
             ResultHandle argsArray = notify.newArray(Object.class, notify.load(referenceHandles.length));
             for (int i = 0; i < referenceHandles.length; i++) {
                 notify.writeArrayValue(paramTypesArray, i,
-                        notify.loadClass(observer.getObserverMethod().parameters().get(i).name().toString()));
+                        notify.loadClass(observer.getObserverMethod().parameterType(i).name().toString()));
                 notify.writeArrayValue(argsArray, i, referenceHandles[i]);
             }
             reflectionRegistration.registerMethod(observer.getObserverMethod());
@@ -485,6 +485,9 @@ public class ObserverGenerator extends AbstractGenerator {
             constructor = observerCreator.getMethodCreator(Methods.INIT, "V");
             // Invoke super()
             constructor.invokeSpecialMethod(MethodDescriptors.OBJECT_CONSTRUCTOR, constructor.getThis());
+
+            SyntheticComponentsUtil.addParamsFieldAndInit(observerCreator, constructor, observer.getParams(),
+                    annotationLiterals, observer.getBeanDeployment().getBeanArchiveIndex());
         } else {
             // Declaring provider and injection points
             // First collect all param types
@@ -587,8 +590,7 @@ public class ObserverGenerator extends AbstractGenerator {
                     ClassInfo qualifierClass = observer.getBeanDeployment()
                             .getQualifier(qualifierAnnotation.name());
                     constructor.writeArrayValue(qualifiersArray, constructor.load(qualifiersIndex++),
-                            annotationLiterals.process(constructor, classOutput,
-                                    qualifierClass, qualifierAnnotation, Types.getPackageName(observerCreator.getClassName())));
+                            annotationLiterals.create(constructor, qualifierClass, qualifierAnnotation));
                 }
             }
             constructor.writeInstanceField(

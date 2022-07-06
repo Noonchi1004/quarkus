@@ -7,9 +7,11 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.lang.reflect.InvocationTargetException;
+import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.BooleanSupplier;
@@ -25,6 +27,8 @@ import io.quarkus.deployment.util.ExecUtil;
 public class IsDockerWorking implements BooleanSupplier {
 
     private static final Logger LOGGER = Logger.getLogger(IsDockerWorking.class.getName());
+    public static final int DOCKER_HOST_CHECK_TIMEOUT = 1000;
+    public static final int DOCKER_CMD_CHECK_TIMEOUT = 3000;
 
     private final List<Strategy> strategies;
 
@@ -40,6 +44,7 @@ public class IsDockerWorking implements BooleanSupplier {
     @Override
     public boolean getAsBoolean() {
         for (Strategy strategy : strategies) {
+            LOGGER.debugf("Checking Docker Environment using strategy %s", strategy.getClass().getName());
             Result result = strategy.get();
             if (result == Result.AVAILABLE) {
                 return true;
@@ -81,6 +86,9 @@ public class IsDockerWorking implements BooleanSupplier {
                 Object dockerClientFactoryInstance = dockerClientFactoryClass.getMethod("instance").invoke(null);
                 boolean isAvailable = (boolean) dockerClientFactoryClass.getMethod("isDockerAvailable")
                         .invoke(dockerClientFactoryInstance);
+                if (!isAvailable) {
+                    compressor.closeAndDumpCaptured();
+                }
                 return isAvailable ? Result.AVAILABLE : Result.UNAVAILABLE;
             } catch (ClassNotFoundException | NoSuchMethodException | InvocationTargetException | IllegalAccessException e) {
                 if (!silent) {
@@ -110,14 +118,15 @@ public class IsDockerWorking implements BooleanSupplier {
             if (dockerHost != null && !dockerHost.startsWith("unix:")) {
                 try {
                     URI url = new URI(dockerHost);
-                    try (Socket s = new Socket(url.getHost(), url.getPort())) {
+                    try (Socket s = new Socket()) {
+                        s.connect(new InetSocketAddress(url.getHost(), url.getPort()), DOCKER_HOST_CHECK_TIMEOUT);
                         return Result.AVAILABLE;
                     } catch (IOException e) {
                         LOGGER.warnf(
                                 "Unable to connect to DOCKER_HOST URI %s, make sure docker is running on the specified host",
                                 dockerHost);
                     }
-                } catch (URISyntaxException e) {
+                } catch (URISyntaxException | IllegalArgumentException e) {
                     LOGGER.warnf("Unable to parse DOCKER_HOST URI %s, it will be ignored for working docker detection",
                             dockerHost);
                 }
@@ -140,7 +149,7 @@ public class IsDockerWorking implements BooleanSupplier {
         @Override
         public Result get() {
             try {
-                if (!ExecUtil.execSilent(binary, "-v")) {
+                if (!ExecUtil.execSilentWithTimeout(Duration.ofMillis(DOCKER_CMD_CHECK_TIMEOUT), binary, "-v")) {
                     LOGGER.warnf("'%s -v' returned an error code. Make sure your Docker binary is correct", binary);
                     return Result.UNKNOWN;
                 }
@@ -151,7 +160,8 @@ public class IsDockerWorking implements BooleanSupplier {
 
             try {
                 OutputFilter filter = new OutputFilter();
-                if (ExecUtil.exec(new File("."), filter, "docker", "version", "--format", "'{{.Server.Version}}'")) {
+                if (ExecUtil.execWithTimeout(new File("."), filter, Duration.ofMillis(DOCKER_CMD_CHECK_TIMEOUT),
+                        "docker", "version", "--format", "'{{.Server.Version}}'")) {
                     LOGGER.debugf("Docker daemon found. Version: %s", filter.getOutput());
                     return Result.AVAILABLE;
                 } else {

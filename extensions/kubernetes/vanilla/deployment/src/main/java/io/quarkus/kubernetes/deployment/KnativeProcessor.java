@@ -19,16 +19,21 @@ import io.dekorate.knative.decorator.AddHostAliasesToRevisionDecorator;
 import io.dekorate.knative.decorator.AddPvcVolumeToRevisionDecorator;
 import io.dekorate.knative.decorator.AddSecretVolumeToRevisionDecorator;
 import io.dekorate.knative.decorator.AddSidecarToRevisionDecorator;
+import io.dekorate.knative.decorator.ApplyAnnotationsToServiceTemplate;
 import io.dekorate.knative.decorator.ApplyGlobalAutoscalingClassDecorator;
 import io.dekorate.knative.decorator.ApplyGlobalRequestsPerSecondTargetDecorator;
 import io.dekorate.knative.decorator.ApplyGlobalTargetUtilizationDecorator;
 import io.dekorate.knative.decorator.ApplyLocalContainerConcurrencyDecorator;
 import io.dekorate.knative.decorator.ApplyRevisionNameDecorator;
+import io.dekorate.knative.decorator.ApplyServiceAccountToRevisionSpecDecorator;
 import io.dekorate.knative.decorator.ApplyTrafficDecorator;
 import io.dekorate.kubernetes.config.EnvBuilder;
 import io.dekorate.kubernetes.decorator.AddConfigMapDataDecorator;
+import io.dekorate.kubernetes.decorator.AddConfigMapResourceProvidingDecorator;
 import io.dekorate.kubernetes.decorator.AddEnvVarDecorator;
+import io.dekorate.kubernetes.decorator.AddImagePullSecretToServiceAccountDecorator;
 import io.dekorate.kubernetes.decorator.AddLabelDecorator;
+import io.dekorate.kubernetes.decorator.AddServiceAccountResourceDecorator;
 import io.dekorate.kubernetes.decorator.ApplicationContainerDecorator;
 import io.dekorate.project.Project;
 import io.quarkus.container.spi.BaseImageInfoBuildItem;
@@ -60,11 +65,6 @@ public class KnativeProcessor {
     private static final int KNATIVE_PRIORITY = DEFAULT_PRIORITY;
 
     private static final String LATEST_REVISION = "latest";
-    /**
-     * The following properties must be set to workaround
-     * this Dekorate issue: https://github.com/dekorateio/dekorate/issues/869.
-     * Once this issue is fixed, we can get rid of these properties and use the Dekorate knative decorators.
-     */
     private static final String KNATIVE_CONFIG_AUTOSCALER = "config-autoscaler";
     private static final String KNATIVE_CONFIG_DEFAULTS = "config-defaults";
     private static final String KNATIVE_SERVING = "knative-serving";
@@ -76,6 +76,7 @@ public class KnativeProcessor {
     private static final String KNATIVE_UTILIZATION_PERCENTAGE = "autoscaling.knative.dev/target-utilization-percentage";
     private static final String KNATIVE_AUTOSCALING_TARGET = "autoscaling.knative.dev/target";
     private static final String KNATIVE_CONTAINER_CONCURRENCY = "container-concurrency";
+    private static final String KNATIVE_DEV_VISIBILITY = "networking.knative.dev/visibility";
 
     @BuildStep
     public void checkKnative(ApplicationInfoBuildItem applicationInfo, KnativeConfig config,
@@ -136,21 +137,27 @@ public class KnativeProcessor {
             Optional<KubernetesHealthReadinessPathBuildItem> readinessPath,
             List<KubernetesRoleBuildItem> roles,
             List<KubernetesRoleBindingBuildItem> roleBindings,
-            Optional<CustomProjectRootBuildItem> customProjectRoot) {
+            Optional<CustomProjectRootBuildItem> customProjectRoot,
+            List<KubernetesDeploymentTargetBuildItem> targets) {
 
         List<DecoratorBuildItem> result = new ArrayList<>();
-        String name = ResourceNameUtil.getResourceName(config, applicationInfo);
+        if (!targets.stream().filter(KubernetesDeploymentTargetBuildItem::isEnabled)
+                .anyMatch(t -> KNATIVE.equals(t.getName()))) {
+            return result;
+        }
 
+        String name = ResourceNameUtil.getResourceName(config, applicationInfo);
         Optional<Project> project = KubernetesCommonHelper.createProject(applicationInfo, customProjectRoot, outputTarget,
                 packageConfig);
-        result.addAll(KubernetesCommonHelper.createDecorators(project, KNATIVE, name, config,
-                metricsConfiguration, annotations,
-                labels, command,
-                ports, livenessPath, readinessPath, roles, roleBindings));
+        result.addAll(KubernetesCommonHelper.createDecorators(project, KNATIVE, name, config, metricsConfiguration, annotations,
+                labels, command, ports, livenessPath, readinessPath, roles, roleBindings));
 
         image.ifPresent(i -> {
             result.add(new DecoratorBuildItem(KNATIVE, new ApplyContainerImageDecorator(name, i.getImage())));
         });
+
+        config.getContainerName().ifPresent(containerName -> result
+                .add(new DecoratorBuildItem(KNATIVE, new ChangeContainerNameDecorator(containerName))));
 
         Stream.concat(config.convertToBuildItems().stream(),
                 envs.stream().filter(e -> e.getTarget() == null || KNATIVE.equals(e.getTarget()))).forEach(e -> {
@@ -165,8 +172,11 @@ public class KnativeProcessor {
                 });
 
         if (config.clusterLocal) {
-            result.add(new DecoratorBuildItem(KNATIVE,
-                    new AddLabelDecorator(name, "serving.knative.dev/visibility", "cluster-local")));
+            if (labels.stream().noneMatch(l -> l.getKey().equals(KNATIVE_DEV_VISIBILITY))) {
+                result.add(new DecoratorBuildItem(KNATIVE,
+                        new AddLabelDecorator(name, KNATIVE_DEV_VISIBILITY, "cluster-local")));
+            }
+
         }
 
         /**
@@ -220,13 +230,13 @@ public class KnativeProcessor {
                 .ifPresent(a -> {
                     result.add(
                             new DecoratorBuildItem(KNATIVE,
-                                    new AddConfigMapDecorator(KNATIVE_CONFIG_AUTOSCALER, KNATIVE_SERVING)));
+                                    new AddConfigMapResourceProvidingDecorator(KNATIVE_CONFIG_AUTOSCALER, KNATIVE_SERVING)));
                     result.add(new DecoratorBuildItem(KNATIVE, new ApplyGlobalAutoscalingClassDecorator(a)));
                 });
         config.globalAutoScaling.containerConcurrency.map(String::valueOf)
                 .ifPresent(c -> {
                     result.add(new DecoratorBuildItem(KNATIVE,
-                            new AddConfigMapDecorator(KNATIVE_CONFIG_DEFAULTS, KNATIVE_SERVING)));
+                            new AddConfigMapResourceProvidingDecorator(KNATIVE_CONFIG_DEFAULTS, KNATIVE_SERVING)));
                     /**
                      * Once the Dekorate issue is fixed https://github.com/dekorateio/dekorate/issues/869,
                      * we should replace ApplyAnnotationsToServiceTemplate by ApplyGlobalContainerConcurrencyDecorator.
@@ -239,7 +249,7 @@ public class KnativeProcessor {
                 .ifPresent(r -> {
                     result.add(
                             new DecoratorBuildItem(KNATIVE,
-                                    new AddConfigMapDecorator(KNATIVE_CONFIG_AUTOSCALER, KNATIVE_SERVING)));
+                                    new AddConfigMapResourceProvidingDecorator(KNATIVE_CONFIG_AUTOSCALER, KNATIVE_SERVING)));
                     result.add(new DecoratorBuildItem(KNATIVE, new ApplyGlobalRequestsPerSecondTargetDecorator(r)));
                 });
 
@@ -247,12 +257,13 @@ public class KnativeProcessor {
                 .ifPresent(t -> {
                     result.add(
                             new DecoratorBuildItem(KNATIVE,
-                                    new AddConfigMapDecorator(KNATIVE_CONFIG_AUTOSCALER, KNATIVE_SERVING)));
+                                    new AddConfigMapResourceProvidingDecorator(KNATIVE_CONFIG_AUTOSCALER, KNATIVE_SERVING)));
                     result.add(new DecoratorBuildItem(KNATIVE, new ApplyGlobalTargetUtilizationDecorator(t)));
                 });
 
         if (!config.scaleToZeroEnabled) {
-            result.add(new DecoratorBuildItem(KNATIVE, new AddConfigMapDecorator(KNATIVE_CONFIG_AUTOSCALER, KNATIVE_SERVING)));
+            result.add(new DecoratorBuildItem(KNATIVE,
+                    new AddConfigMapResourceProvidingDecorator(KNATIVE_CONFIG_AUTOSCALER, KNATIVE_SERVING)));
             result.add(
                     new DecoratorBuildItem(KNATIVE,
                             new AddConfigMapDataDecorator(KNATIVE_CONFIG_AUTOSCALER, "enable-scale-to-zero",
@@ -261,7 +272,7 @@ public class KnativeProcessor {
 
         result.add(new DecoratorBuildItem(KNATIVE, new ApplyServiceTypeDecorator(name, config.getServiceType().name())));
 
-        //In Knative its expected that all http ports in probe are ommitted (so we set them to null).
+        //In Knative its expected that all http ports in probe are omitted (so we set them to null).
         result.add(new DecoratorBuildItem(KNATIVE, new ApplyHttpGetActionPortDecorator(null)));
 
         //Traffic Splitting
@@ -293,6 +304,16 @@ public class KnativeProcessor {
         if (!roleBindings.isEmpty()) {
             result.add(new DecoratorBuildItem(new ApplyServiceAccountNameToRevisionSpecDecorator()));
         }
+
+        //Handle Image Pull Secrets
+        config.getImagePullSecrets().ifPresent(imagePullSecrets -> {
+            String serviceAccountName = config.getServiceAccount().orElse(name);
+            result.add(new DecoratorBuildItem(KNATIVE, new AddServiceAccountResourceDecorator(name)));
+            result.add(
+                    new DecoratorBuildItem(KNATIVE, new ApplyServiceAccountToRevisionSpecDecorator(name, serviceAccountName)));
+            result.add(new DecoratorBuildItem(KNATIVE,
+                    new AddImagePullSecretToServiceAccountDecorator(serviceAccountName, imagePullSecrets)));
+        });
 
         return result;
     }

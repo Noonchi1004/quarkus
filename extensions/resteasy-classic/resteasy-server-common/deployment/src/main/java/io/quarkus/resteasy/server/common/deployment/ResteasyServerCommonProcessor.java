@@ -56,7 +56,6 @@ import io.quarkus.arc.processor.AnnotationsTransformer;
 import io.quarkus.arc.processor.BuiltinScope;
 import io.quarkus.arc.processor.DotNames;
 import io.quarkus.arc.processor.Transformation;
-import io.quarkus.bootstrap.classloading.ClassPathElement;
 import io.quarkus.bootstrap.classloading.QuarkusClassLoader;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
@@ -154,7 +153,7 @@ public class ResteasyServerCommonProcessor {
         String path;
 
         /**
-         * Whether or not detailed JAX-RS metrics should be enabled if the smallrye-metrics
+         * Whether detailed JAX-RS metrics should be enabled if the smallrye-metrics
          * extension is present.
          * <p>
          * See <a href=
@@ -175,7 +174,7 @@ public class ResteasyServerCommonProcessor {
         boolean ignoreApplicationClasses;
 
         /**
-         * Whether or not annotations such `@IfBuildTimeProfile`, `@IfBuildTimeProperty` and friends will be taken
+         * Whether annotations such `@IfBuildTimeProfile`, `@IfBuildTimeProperty` and friends will be taken
          * into account when used on JAX-RS classes.
          */
         @ConfigItem(defaultValue = "true")
@@ -184,10 +183,8 @@ public class ResteasyServerCommonProcessor {
 
     @BuildStep
     NativeImageResourceBundleBuildItem optionalResourceBundle() {
-        for (ClassPathElement cpe : QuarkusClassLoader.getElements(MESSAGES_RESOURCE_BUNDLE, false)) {
-            if (cpe.isRuntime()) {
-                return new NativeImageResourceBundleBuildItem(MESSAGES_RESOURCE_BUNDLE);
-            }
+        if (QuarkusClassLoader.isResourcePresentAtRuntime(MESSAGES_RESOURCE_BUNDLE)) {
+            return new NativeImageResourceBundleBuildItem(MESSAGES_RESOURCE_BUNDLE);
         }
 
         return null;
@@ -443,7 +440,7 @@ public class ResteasyServerCommonProcessor {
                 }
                 if (clazz.classAnnotation(ResteasyDotNames.PROVIDER) != null) {
                     Transformation transformation = null;
-                    if (clazz.annotations().containsKey(DotNames.INJECT)
+                    if (clazz.annotationsMap().containsKey(DotNames.INJECT)
                             || hasAutoInjectAnnotation(autoInjectAnnotationNames, clazz)) {
                         // A provider with an injection point but no built-in scope is @Singleton
                         transformation = context.transform().add(BuiltinScope.SINGLETON.getName());
@@ -543,7 +540,7 @@ public class ResteasyServerCommonProcessor {
 
     private boolean hasAutoInjectAnnotation(Set<DotName> autoInjectAnnotationNames, ClassInfo clazz) {
         for (DotName name : autoInjectAnnotationNames) {
-            List<AnnotationInstance> instances = clazz.annotations().get(name);
+            List<AnnotationInstance> instances = clazz.annotationsMap().get(name);
             if (instances != null) {
                 for (AnnotationInstance instance : instances) {
                     if (instance.target().kind() == Kind.FIELD) {
@@ -640,7 +637,7 @@ public class ResteasyServerCommonProcessor {
             ClassInfo classInfo = index.getClassByName(DotName.createSimple(providerToRegister));
             boolean includeFields = false;
             if (classInfo != null) {
-                includeFields = classInfo.annotations().containsKey(ResteasyDotNames.CONTEXT);
+                includeFields = classInfo.annotationsMap().containsKey(ResteasyDotNames.CONTEXT);
             }
             reflectiveClass.produce(new ReflectiveClassBuildItem(false, includeFields, providerToRegister));
         }
@@ -769,14 +766,14 @@ public class ResteasyServerCommonProcessor {
             Type annotatedType = null;
             if (annotation.target().kind() == AnnotationTarget.Kind.METHOD) {
                 MethodInfo method = annotation.target().asMethod();
-                if (method.parameters().size() == 1) {
-                    annotatedType = method.parameters().get(0);
+                if (method.parametersCount() == 1) {
+                    annotatedType = method.parameterType(0);
                 }
             } else if (annotation.target().kind() == AnnotationTarget.Kind.FIELD) {
                 annotatedType = annotation.target().asField().type();
             } else if (annotation.target().kind() == AnnotationTarget.Kind.METHOD_PARAMETER) {
                 int pos = annotation.target().asMethodParameter().position();
-                annotatedType = annotation.target().asMethodParameter().method().parameters().get(pos);
+                annotatedType = annotation.target().asMethodParameter().method().parameterType(pos);
             }
             if (annotatedType != null && annotatedType.kind() != Type.Kind.PRIMITIVE) {
                 ClassInfo type = index.getClassByName(annotatedType.name());
@@ -861,8 +858,8 @@ public class ResteasyServerCommonProcessor {
                     .source(source)
                     .build());
 
-            for (short i = 0; i < method.parameters().size(); i++) {
-                Type parameterType = method.parameters().get(i);
+            for (short i = 0; i < method.parametersCount(); i++) {
+                Type parameterType = method.parameterType(i);
                 if (!hasAnnotation(method, i, ResteasyDotNames.CONTEXT)) {
                     reflectiveHierarchy.produce(new ReflectiveHierarchyBuildItem.Builder()
                             .type(parameterType)
@@ -926,7 +923,7 @@ public class ResteasyServerCommonProcessor {
      * @param annotationInstance the annotation instance to test.
      * @return {@code true} if the enclosing class of the annotation is a concrete class and is part of the allowed
      *         classes, or is an interface and at least one concrete implementation is included, or is an abstract class
-     *         and at least one concrete sub class is included, or is not part of the excluded classes, {@code false} otherwise.
+     *         and at least one concrete subclass is included, or is not part of the excluded classes, {@code false} otherwise.
      */
     private static boolean keepAnnotation(IndexView index, Set<String> allowedClasses, Set<String> excludedClasses,
             AnnotationInstance annotationInstance) {
@@ -937,13 +934,13 @@ public class ResteasyServerCommonProcessor {
             // Keep the enclosing class only if not excluded
             return !excludedClasses.contains(className);
         } else if (Modifier.isAbstract(classInfo.flags())) {
-            // Only keep the annotation if a concrete implementation or a sub class has been included
+            // Only keep the annotation if a concrete implementation or a subclass has been included
             return (Modifier.isInterface(classInfo.flags()) ? index.getAllKnownImplementors(classInfo.name())
                     : index.getAllKnownSubclasses(classInfo.name()))
-                            .stream()
-                            .filter(clazz -> !Modifier.isAbstract(clazz.flags()))
-                            .map(Objects::toString)
-                            .anyMatch(allowedClasses::contains);
+                    .stream()
+                    .filter(clazz -> !Modifier.isAbstract(clazz.flags()))
+                    .map(Objects::toString)
+                    .anyMatch(allowedClasses::contains);
         }
         return allowedClasses.contains(className);
     }
@@ -951,13 +948,13 @@ public class ResteasyServerCommonProcessor {
     /**
      * @param allowedClasses the classes returned by the methods {@link Application#getClasses()} and
      *        {@link Application#getSingletons()} to keep.
-     * @param excludedClasses the classes that have been annotated wih unsuccessful build time conditions and that
+     * @param excludedClasses the classes that have been annotated with unsuccessful build time conditions and that
      *        need to be excluded from the list of providers.
      * @param jaxrsProvidersToRegisterBuildItem the initial {@code jaxrsProvidersToRegisterBuildItem} before being
      *        filtered
      * @return an instance of {@link JaxrsProvidersToRegisterBuildItem} that has been filtered to take into account
      *         the classes returned by the methods {@link Application#getClasses()} and {@link Application#getSingletons()}
-     *         if at least one of those methods return a non empty {@code Set}, the provided instance of
+     *         if at least one of those methods return a non-empty {@code Set}, the provided instance of
      *         {@link JaxrsProvidersToRegisterBuildItem} otherwise.
      */
     private static JaxrsProvidersToRegisterBuildItem getFilteredJaxrsProvidersToRegisterBuildItem(
@@ -1001,7 +998,7 @@ public class ResteasyServerCommonProcessor {
                 throw new RuntimeException("More than one Application class: " + applications);
             }
             selectedAppClass = applicationClassInfo;
-            if (selectedAppClass.annotations().containsKey(ResteasyDotNames.CDI_INJECT)) {
+            if (selectedAppClass.annotationsMap().containsKey(ResteasyDotNames.CDI_INJECT)) {
                 throw new RuntimeException(
                         "Usage of '@Inject' is not allowed in 'javax.ws.rs.core.Application' classes. Offending class is '"
                                 + selectedAppClass.name() + "'");

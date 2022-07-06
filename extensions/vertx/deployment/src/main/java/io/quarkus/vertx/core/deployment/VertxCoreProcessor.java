@@ -44,6 +44,7 @@ import io.quarkus.deployment.builditem.ServiceStartBuildItem;
 import io.quarkus.deployment.builditem.ShutdownContextBuildItem;
 import io.quarkus.deployment.builditem.ThreadFactoryBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.NativeImageConfigBuildItem;
+import io.quarkus.deployment.builditem.nativeimage.NativeImageResourceBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
 import io.quarkus.deployment.logging.LogCleanupFilterBuildItem;
 import io.quarkus.gizmo.Gizmo;
@@ -52,6 +53,7 @@ import io.quarkus.vertx.core.runtime.VertxCoreRecorder;
 import io.quarkus.vertx.core.runtime.VertxLocalsHelper;
 import io.quarkus.vertx.core.runtime.VertxLogDelegateFactory;
 import io.quarkus.vertx.core.runtime.config.VertxConfiguration;
+import io.quarkus.vertx.mdc.provider.LateBoundMDCProvider;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.Vertx;
 import io.vertx.core.VertxOptions;
@@ -67,8 +69,11 @@ class VertxCoreProcessor {
     );
 
     @BuildStep
-    NativeImageConfigBuildItem build(BuildProducer<ReflectiveClassBuildItem> reflectiveClass) {
+    NativeImageConfigBuildItem build(BuildProducer<ReflectiveClassBuildItem> reflectiveClass,
+            BuildProducer<NativeImageResourceBuildItem> nativeImageResources) {
         reflectiveClass.produce(new ReflectiveClassBuildItem(true, false, VertxLogDelegateFactory.class.getName()));
+        reflectiveClass.produce(new ReflectiveClassBuildItem(true, true, LateBoundMDCProvider.class.getName()));
+        nativeImageResources.produce(new NativeImageResourceBuildItem("META-INF/services/org.jboss.logmanager.MDCProvider"));
         return NativeImageConfigBuildItem.builder()
                 .addRuntimeInitializedClass("io.vertx.core.buffer.impl.VertxByteBufAllocator")
                 .addRuntimeInitializedClass("io.vertx.core.buffer.impl.PartialPooledByteBufAllocator")
@@ -170,7 +175,7 @@ class VertxCoreProcessor {
     LogCategoryBuildItem preventLoggerContention() {
         //Prevent the Logging warning about the TCCL checks being disabled to be logged;
         //this is similar to #cleanupVertxWarnings but prevents it by changing the level:
-        // it takes advantage of the fact that there is a single other log in thi class,
+        // it takes advantage of the fact that there is a single other log in this class,
         // and it happens to be at error level.
         //This is more effective than the LogCleanupFilterBuildItem as we otherwise have
         //contention since this message could be logged very frequently.
@@ -316,7 +321,7 @@ class VertxCoreProcessor {
                     }
                     if (client) {
                         //for client mode we assume the debugger is always attached
-                        //this is how IDE's run tests etc, so the debugger is attached right from the start
+                        //this is how IDE's run tests etc., so the debugger is attached right from the start
                         //in this mode we will never print the blocked thread warnings
                         alwaysFilter = true;
                         break;

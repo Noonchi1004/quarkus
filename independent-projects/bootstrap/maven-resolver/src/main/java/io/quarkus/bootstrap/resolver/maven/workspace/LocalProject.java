@@ -339,33 +339,65 @@ public class LocalProject {
                 .setBuildDir(getOutputDir());
 
         final Build build = (modelBuildingResult == null ? getRawModel() : modelBuildingResult.getEffectiveModel()).getBuild();
+        boolean addDefaultSourceSet = true;
         if (build != null && !build.getPlugins().isEmpty()) {
             for (Plugin plugin : build.getPlugins()) {
-                if (!plugin.getArtifactId().equals("maven-jar-plugin")) {
-                    continue;
-                }
-                if (plugin.getExecutions().isEmpty()) {
-                    final DefaultArtifactSources src = processJarPluginExecutionConfig(plugin.getConfiguration(), false);
-                    if (src != null) {
-                        moduleBuilder.addArtifactSources(src);
-                    }
-                } else {
-                    for (PluginExecution e : plugin.getExecutions()) {
-                        DefaultArtifactSources src = null;
-                        if (e.getGoals().contains(ArtifactCoords.TYPE_JAR)) {
-                            src = processJarPluginExecutionConfig(e.getConfiguration(), false);
-                        } else if (e.getGoals().contains("test-jar")) {
-                            src = processJarPluginExecutionConfig(e.getConfiguration(), true);
-                        }
+                if (plugin.getArtifactId().equals("maven-jar-plugin")) {
+                    if (plugin.getExecutions().isEmpty()) {
+                        final DefaultArtifactSources src = processJarPluginExecutionConfig(plugin.getConfiguration(), false);
                         if (src != null) {
+                            addDefaultSourceSet = false;
                             moduleBuilder.addArtifactSources(src);
+                        }
+                    } else {
+                        for (PluginExecution e : plugin.getExecutions()) {
+                            DefaultArtifactSources src = null;
+                            if (e.getGoals().contains(ArtifactCoords.TYPE_JAR)) {
+                                src = processJarPluginExecutionConfig(e.getConfiguration(), false);
+                                addDefaultSourceSet &= !e.getId().equals("default-jar");
+                            } else if (e.getGoals().contains("test-jar")) {
+                                src = processJarPluginExecutionConfig(e.getConfiguration(), true);
+                            }
+                            if (src != null) {
+                                moduleBuilder.addArtifactSources(src);
+                            }
+                        }
+                    }
+                } else if (plugin.getArtifactId().equals("maven-surefire-plugin") && plugin.getConfiguration() != null) {
+                    Object config = plugin.getConfiguration();
+                    if (config == null || !(config instanceof Xpp3Dom)) {
+                        continue;
+                    }
+                    Xpp3Dom dom = (Xpp3Dom) config;
+                    final Xpp3Dom depExcludes = dom.getChild("classpathDependencyExcludes");
+                    if (depExcludes != null) {
+                        final Xpp3Dom[] excludes = depExcludes.getChildren("classpathDependencyExclude");
+                        if (excludes != null) {
+                            final List<String> list = new ArrayList<>(excludes.length);
+                            for (Xpp3Dom exclude : excludes) {
+                                list.add(exclude.getValue());
+                            }
+                            moduleBuilder.setTestClasspathDependencyExclusions(list);
+                        }
+                    }
+                    final Xpp3Dom additionalElements = dom.getChild("additionalClasspathElements");
+                    if (additionalElements != null) {
+                        final Xpp3Dom[] elements = additionalElements.getChildren("additionalClasspathElement");
+                        if (elements != null) {
+                            final List<String> list = new ArrayList<>(elements.length);
+                            for (Xpp3Dom element : elements) {
+                                for (String s : element.getValue().split(",")) {
+                                    list.add(stripProjectBasedirPrefix(s, PROJECT_BASEDIR));
+                                }
+                            }
+                            moduleBuilder.setAdditionalTestClasspathElements(list);
                         }
                     }
                 }
             }
         }
 
-        if (!moduleBuilder.hasNonTestSources()) {
+        if (addDefaultSourceSet) {
             moduleBuilder.addArtifactSources(new DefaultArtifactSources(ArtifactSources.MAIN,
                     Collections.singletonList(new DefaultSourceDir(getSourcesSourcesDir(), getClassesDir())),
                     collectMainResources(null)));
@@ -405,7 +437,9 @@ public class LocalProject {
         if (elementValue == null || elementValue.isEmpty() || !(elementValue.startsWith("${") && elementValue.endsWith("}"))) {
             return elementValue;
         }
-        return rawModel.getProperties().getProperty(elementValue.substring(2, elementValue.length() - 1), elementValue);
+        final String propName = elementValue.substring(2, elementValue.length() - 1);
+        String v = System.getProperty(propName);
+        return v == null ? rawModel.getProperties().getProperty(propName, elementValue) : v;
     }
 
     private DefaultArtifactSources processJarPluginExecutionConfig(Object config, boolean test) {

@@ -10,8 +10,8 @@
     <modelVersion>4.0.0</modelVersion>
 
     <artifactId>quarkus-smallrye-fault-tolerance</artifactId>
-    <name>Quarkus - SmallRye Fault tolerance - Runtime</name>
-    <description>Define fault-tolerant services</description>
+    <name>Quarkus - SmallRye Fault Tolerance - Runtime</name>
+    <description>Build fault-tolerant network services</description>
     <dependencies>
         <dependency>
             <groupId>io.quarkus</groupId>
@@ -80,7 +80,7 @@
         <plugins>
             <plugin>
                 <groupId>io.quarkus</groupId>
-                <artifactId>quarkus-bootstrap-maven-plugin</artifactId>
+                <artifactId>quarkus-extension-maven-plugin</artifactId>
                 <configuration>
                     <capabilities>
                         <provides>io.quarkus.smallrye.faulttolerance</provides>

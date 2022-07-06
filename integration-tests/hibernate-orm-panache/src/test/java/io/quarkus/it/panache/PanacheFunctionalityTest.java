@@ -86,6 +86,11 @@ public class PanacheFunctionalityTest {
     }
 
     @Test
+    public void testSortByNullPrecedence() {
+        RestAssured.when().get("/test/testSortByNullPrecedence").then().body(is("OK"));
+    }
+
+    @Test
     public void testJaxbAnnotationTransfer() {
         RestAssured.when()
                 .get("/test/testJaxbAnnotationTransfer")
@@ -94,7 +99,7 @@ public class PanacheFunctionalityTest {
     }
 
     /**
-     * _PanacheEntityBase_ has the method _isPersistent_. This method is used by Jackson to serialize the attribute *peristent*
+     * _PanacheEntityBase_ has the method _isPersistent_. This method is used by Jackson to serialize the attribute *persistent*
      * in the JSON which is not intended. This test ensures that the attribute *persistent* is not generated when using Jackson.
      *
      * This test does not interact with the Quarkus application itself. It is just using the Jackson ObjectMapper with a

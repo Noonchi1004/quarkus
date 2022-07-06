@@ -22,7 +22,7 @@ public class SimpleJsonTest {
 
     @RegisterExtension
     static QuarkusUnitTest test = new QuarkusUnitTest()
-            .setArchiveProducer(new Supplier<JavaArchive>() {
+            .setArchiveProducer(new Supplier<>() {
                 @Override
                 public JavaArchive get() {
                     return ShrinkWrap.create(JavaArchive.class)
@@ -293,7 +293,7 @@ public class SimpleJsonTest {
                 .then()
                 .statusCode(200)
                 .contentType("application/json");
-        // assert that the instances were re-used as we simply invoked methods that should have already created their object writters
+        // assert that the instances were re-used as we simply invoked methods that should have already created their object writers
         assertEquals(2, SimpleJsonResource.UnquotedFieldsPersonBiFunction.count.intValue());
 
         RestAssured.get("/simple/invalid-use-of-custom-serializer")

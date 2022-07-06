@@ -21,6 +21,7 @@ import io.quarkus.oidc.common.runtime.OidcCommonUtils;
 import io.quarkus.oidc.common.runtime.OidcConstants;
 import io.smallrye.mutiny.Uni;
 import io.vertx.core.http.HttpHeaders;
+import io.vertx.core.json.DecodeException;
 import io.vertx.core.json.JsonObject;
 import io.vertx.mutiny.core.MultiMap;
 import io.vertx.mutiny.core.buffer.Buffer;
@@ -116,7 +117,7 @@ public class OidcClientImpl implements OidcClient {
                         body.add(entry.getKey(), entry.getValue());
                     }
                 }
-                // Retry up to three times with a one second delay between the retries if the connection is closed
+                // Retry up to three times with a one-second delay between the retries if the connection is closed
                 Uni<HttpResponse<Buffer>> response = request.sendBuffer(OidcCommonUtils.encodeForm(body))
                         .onFailure(ConnectException.class)
                         .retry()
@@ -181,6 +182,8 @@ public class OidcClientImpl implements OidcClient {
                 return new JsonObject(new String(Base64.getUrlDecoder().decode(parts[1]), StandardCharsets.UTF_8));
             } catch (IllegalArgumentException ex) {
                 LOG.debug("JWT token can not be decoded using the Base64Url encoding scheme");
+            } catch (DecodeException ex) {
+                LOG.debug("JWT token can not be decoded");
             }
         } else {
             LOG.debug("Access token is not formatted as the encoded JWT token");

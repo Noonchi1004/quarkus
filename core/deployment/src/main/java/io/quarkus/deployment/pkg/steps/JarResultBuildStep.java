@@ -49,7 +49,6 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
 
-import org.apache.commons.lang3.SystemUtils;
 import org.jboss.logging.Logger;
 
 import io.quarkus.bootstrap.model.MutableJarApplicationModel;
@@ -92,16 +91,16 @@ import io.quarkus.paths.PathVisitor;
 /**
  * This build step builds both the thin jars and uber jars.
  *
- * The way this is built is a bit convoluted. In general we only want a single one built,
+ * The way this is built is a bit convoluted. In general, we only want a single one built,
  * as determined by the {@link PackageConfig} (unless the config explicitly asks for both of them)
  *
- * However we still need an extension to be able to ask for a specify one of these despite the config,
+ * However, we still need an extension to be able to ask for a specific one of these despite the config,
  * e.g. if a serverless environment needs an uberjar to build its deployment package then we need
  * to be able to provide this.
  *
  * To enable this we have two build steps that strongly produce the respective artifact type build
  * items, but not a {@link ArtifactResultBuildItem}. We then
- * have another two build steps that only run if they are configured too that consume these explicit
+ * have another two build steps that only run if they are configured to consume these explicit
  * build items and transform them into {@link ArtifactResultBuildItem}.
  */
 public class JarResultBuildStep {
@@ -264,7 +263,7 @@ public class JarResultBuildStep {
 
         //we use the -runner jar name, unless we are building both types
         Path runnerJar = outputTargetBuildItem.getOutputDirectory()
-                .resolve(outputTargetBuildItem.getBaseName() + packageConfig.runnerSuffix + ".jar");
+                .resolve(outputTargetBuildItem.getBaseName() + packageConfig.getRunnerSuffix() + ".jar");
         Files.deleteIfExists(runnerJar);
 
         buildUberJar0(curateOutcomeBuildItem,
@@ -288,7 +287,7 @@ public class JarResultBuildStep {
         final Path originalJar = Files.exists(standardJar) ? standardJar : null;
 
         return new JarBuildItem(runnerJar, originalJar, null, PackageConfig.UBER_JAR,
-                suffixToClassifier(packageConfig.runnerSuffix));
+                suffixToClassifier(packageConfig.getRunnerSuffix()));
     }
 
     private String suffixToClassifier(String suffix) {
@@ -459,7 +458,7 @@ public class JarResultBuildStep {
                     public FileVisitResult visitFile(Path file, BasicFileAttributes attrs)
                             throws IOException {
                         final String relativePath = toUri(root.relativize(file));
-                        //if this has been transfomed we do not copy it
+                        //if this has been transformed we do not copy it
                         // if it's a signature file (under the <jar>/META-INF directory),
                         // then we don't add it to the uber jar
                         if (isBlockOrSF(relativePath) &&
@@ -503,7 +502,7 @@ public class JarResultBuildStep {
             ClassLoadingConfig classLoadingConfig) throws Exception {
 
         Path runnerJar = outputTargetBuildItem.getOutputDirectory()
-                .resolve(outputTargetBuildItem.getBaseName() + packageConfig.runnerSuffix + ".jar");
+                .resolve(outputTargetBuildItem.getBaseName() + packageConfig.getRunnerSuffix() + ".jar");
         Path libDir = outputTargetBuildItem.getOutputDirectory().resolve("lib");
         Files.deleteIfExists(runnerJar);
         IoUtils.createOrEmptyDir(libDir);
@@ -520,7 +519,7 @@ public class JarResultBuildStep {
         runnerJar.toFile().setReadable(true, false);
 
         return new JarBuildItem(runnerJar, null, libDir, PackageConfig.LEGACY_JAR,
-                suffixToClassifier(packageConfig.runnerSuffix));
+                suffixToClassifier(packageConfig.getRunnerSuffix()));
     }
 
     private JarBuildItem buildThinJar(CurateOutcomeBuildItem curateOutcomeBuildItem,
@@ -575,24 +574,30 @@ public class JarResultBuildStep {
         }
         Map<ArtifactKey, List<Path>> copiedArtifacts = new HashMap<>();
 
-        Path fernflowerJar = null;
         Path decompiledOutputDir = null;
         boolean wasDecompiledSuccessfully = true;
-        if (packageConfig.fernflower.enabled) {
-            Path jarDirectory = Paths.get(packageConfig.fernflower.jarDirectory);
-            if (!Files.exists(jarDirectory)) {
-                Files.createDirectory(jarDirectory);
-            }
-            fernflowerJar = jarDirectory.resolve(String.format("fernflower-%s.jar", packageConfig.fernflower.hash));
-            if (!Files.exists(fernflowerJar)) {
-                boolean downloadComplete = downloadFernflowerJar(packageConfig, fernflowerJar);
-                if (!downloadComplete) {
-                    fernflowerJar = null; // will ensure that no decompilation takes place
-                }
-            }
+        Decompiler decompiler = null;
+        if (packageConfig.fernflower.enabled || packageConfig.quiltflower.enabled) {
             decompiledOutputDir = buildDir.getParent().resolve("decompiled");
             FileUtil.deleteDirectory(decompiledOutputDir);
             Files.createDirectory(decompiledOutputDir);
+            if (packageConfig.fernflower.enabled) {
+                decompiler = new Decompiler.FernflowerDecompiler();
+                Path jarDirectory = Paths.get(packageConfig.fernflower.jarDirectory);
+                if (!Files.exists(jarDirectory)) {
+                    Files.createDirectory(jarDirectory);
+                }
+                decompiler.init(new Decompiler.Context(packageConfig.fernflower.hash, jarDirectory, decompiledOutputDir));
+                decompiler.downloadIfNecessary();
+            } else if (packageConfig.quiltflower.enabled) {
+                decompiler = new Decompiler.QuiltflowerDecompiler();
+                Path jarDirectory = Paths.get(packageConfig.quiltflower.jarDirectory);
+                if (!Files.exists(jarDirectory)) {
+                    Files.createDirectory(jarDirectory);
+                }
+                decompiler.init(new Decompiler.Context(packageConfig.quiltflower.version, jarDirectory, decompiledOutputDir));
+                decompiler.downloadIfNecessary();
+            }
         }
 
         List<Path> jars = new ArrayList<>();
@@ -616,8 +621,8 @@ public class JarResultBuildStep {
                     }
                 }
             }
-            if (fernflowerJar != null) {
-                wasDecompiledSuccessfully &= decompile(fernflowerJar, decompiledOutputDir, transformedZip);
+            if (decompiler != null) {
+                wasDecompiledSuccessfully &= decompiler.decompile(transformedZip);
             }
         }
         //now generated classes and resources
@@ -641,8 +646,8 @@ public class JarResultBuildStep {
                 Files.write(target, i.getClassData());
             }
         }
-        if (fernflowerJar != null) {
-            wasDecompiledSuccessfully &= decompile(fernflowerJar, decompiledOutputDir, generatedZip);
+        if (decompiler != null) {
+            wasDecompiledSuccessfully &= decompiler.decompile(generatedZip);
         }
 
         if (wasDecompiledSuccessfully && (decompiledOutputDir != null)) {
@@ -837,58 +842,6 @@ public class JarResultBuildStep {
         return removed;
     }
 
-    private boolean downloadFernflowerJar(PackageConfig packageConfig, Path fernflowerJar) {
-        String downloadURL = String.format("https://jitpack.io/com/github/fesh0r/fernflower/%s/fernflower-%s.jar",
-                packageConfig.fernflower.hash, packageConfig.fernflower.hash);
-        try (BufferedInputStream in = new BufferedInputStream(new URL(downloadURL).openStream());
-                FileOutputStream fileOutputStream = new FileOutputStream(fernflowerJar.toFile())) {
-            byte[] dataBuffer = new byte[1024];
-            int bytesRead;
-            while ((bytesRead = in.read(dataBuffer, 0, 1024)) != -1) {
-                fileOutputStream.write(dataBuffer, 0, bytesRead);
-            }
-            return true;
-        } catch (IOException e) {
-            log.error("Unable to download Fernflower from " + downloadURL, e);
-            return false;
-        }
-    }
-
-    private boolean decompile(Path fernflowerJar, Path decompiledOutputDir, Path jarToDecompile) {
-        int exitCode;
-        try {
-            ProcessBuilder processBuilder = new ProcessBuilder(
-                    Arrays.asList("java", "-jar", fernflowerJar.toAbsolutePath().toString(),
-                            jarToDecompile.toAbsolutePath().toString(), decompiledOutputDir.toAbsolutePath().toString()));
-            if (log.isDebugEnabled()) {
-                processBuilder.inheritIO();
-            } else {
-                processBuilder.redirectError(ProcessBuilder.Redirect.DISCARD.file())
-                        .redirectOutput(ProcessBuilder.Redirect.DISCARD.file());
-            }
-            exitCode = processBuilder.start().waitFor();
-        } catch (Exception e) {
-            log.error("Failed to launch Fernflower decompiler.", e);
-            return false;
-        }
-
-        if (exitCode != 0) {
-            log.errorf("Fernflower decompiler exited with error code: %d.", exitCode);
-            return false;
-        }
-
-        String jarFileName = jarToDecompile.getFileName().toString();
-        Path decompiledJar = decompiledOutputDir.resolve(jarFileName);
-        try {
-            ZipUtils.unzip(decompiledJar, decompiledOutputDir.resolve(jarFileName.replace(".jar", "")));
-            Files.deleteIfExists(decompiledJar);
-        } catch (IOException ignored) {
-            // it doesn't really matter if we can't unzip the jar as we do it merely for user convenience
-        }
-
-        return true;
-    }
-
     private void copyDependency(Set<ArtifactKey> parentFirstArtifacts, OutputTargetBuildItem outputTargetBuildItem,
             Map<ArtifactKey, List<Path>> runtimeArtifacts, Path libDir, Path baseLib, List<Path> jars,
             boolean allowParentFirst, StringBuilder classPath, ResolvedDependency appDep,
@@ -975,10 +928,7 @@ public class JarResultBuildStep {
             List<GeneratedNativeImageClassBuildItem> nativeImageResources,
             List<GeneratedResourceBuildItem> generatedResources,
             MainClassBuildItem mainClassBuildItem,
-            List<UberJarRequiredBuildItem> uberJarRequired,
-            List<UberJarMergedResourceBuildItem> mergeResources,
-            ClassLoadingConfig classLoadingConfig,
-            List<UberJarIgnoredResourceBuildItem> ignoreResources) throws Exception {
+            ClassLoadingConfig classLoadingConfig) throws Exception {
         Path targetDirectory = outputTargetBuildItem.getOutputDirectory()
                 .resolve(outputTargetBuildItem.getBaseName() + "-native-image-source-jar");
         IoUtils.createOrEmptyDir(targetDirectory);
@@ -988,28 +938,10 @@ public class JarResultBuildStep {
                 .map((s) -> new GeneratedClassBuildItem(true, s.getName(), s.getClassData()))
                 .collect(Collectors.toList()));
 
-        if (SystemUtils.IS_OS_WINDOWS) {
-            log.warn("Uber JAR strategy is used for native image source JAR generation on Windows. This is done " +
-                    "for the time being to work around a current GraalVM limitation on Windows concerning the " +
-                    "maximum command length (see https://github.com/oracle/graal/issues/2387).");
-            // Native image source jar generation with the uber jar strategy is provided as a workaround for Windows and
-            // will be removed once https://github.com/oracle/graal/issues/2387 is fixed.
-            final NativeImageSourceJarBuildItem nativeImageSourceJarBuildItem = buildNativeImageUberJar(curateOutcomeBuildItem,
-                    outputTargetBuildItem, transformedClasses,
-                    applicationArchivesBuildItem,
-                    packageConfig, applicationInfo, allClasses, generatedResources, mergeResources,
-                    ignoreResources, mainClassBuildItem,
-                    targetDirectory, classLoadingConfig);
-            // additionally copy any json config files to a location accessible by native-image tool during
-            // native-image generation
-            copyJsonConfigFiles(applicationArchivesBuildItem, targetDirectory);
-            return nativeImageSourceJarBuildItem;
-        } else {
-            return buildNativeImageThinJar(curateOutcomeBuildItem, outputTargetBuildItem, transformedClasses,
-                    applicationArchivesBuildItem,
-                    applicationInfo, packageConfig, allClasses, generatedResources, mainClassBuildItem, targetDirectory,
-                    classLoadingConfig);
-        }
+        return buildNativeImageThinJar(curateOutcomeBuildItem, outputTargetBuildItem, transformedClasses,
+                applicationArchivesBuildItem,
+                applicationInfo, packageConfig, allClasses, generatedResources, mainClassBuildItem, targetDirectory,
+                classLoadingConfig);
     }
 
     private NativeImageSourceJarBuildItem buildNativeImageThinJar(CurateOutcomeBuildItem curateOutcomeBuildItem,
@@ -1026,7 +958,7 @@ public class JarResultBuildStep {
         copyJsonConfigFiles(applicationArchivesBuildItem, targetDirectory);
 
         Path runnerJar = targetDirectory
-                .resolve(outputTargetBuildItem.getBaseName() + packageConfig.runnerSuffix + ".jar");
+                .resolve(outputTargetBuildItem.getBaseName() + packageConfig.getRunnerSuffix() + ".jar");
         Path libDir = targetDirectory.resolve(LIB);
         Files.createDirectories(libDir);
 
@@ -1040,40 +972,6 @@ public class JarResultBuildStep {
         }
         runnerJar.toFile().setReadable(true, false);
         return new NativeImageSourceJarBuildItem(runnerJar, libDir);
-    }
-
-    private NativeImageSourceJarBuildItem buildNativeImageUberJar(CurateOutcomeBuildItem curateOutcomeBuildItem,
-            OutputTargetBuildItem outputTargetBuildItem,
-            TransformedClassesBuildItem transformedClasses,
-            ApplicationArchivesBuildItem applicationArchivesBuildItem,
-            PackageConfig packageConfig,
-            ApplicationInfoBuildItem applicationInfo,
-            List<GeneratedClassBuildItem> generatedClasses,
-            List<GeneratedResourceBuildItem> generatedResources,
-            List<UberJarMergedResourceBuildItem> mergeResources,
-            List<UberJarIgnoredResourceBuildItem> ignoreResources,
-            MainClassBuildItem mainClassBuildItem,
-            Path targetDirectory,
-            ClassLoadingConfig classLoadingConfig) throws Exception {
-        //we use the -runner jar name, unless we are building both types
-        Path runnerJar = targetDirectory
-                .resolve(outputTargetBuildItem.getBaseName() + packageConfig.runnerSuffix + ".jar");
-
-        buildUberJar0(curateOutcomeBuildItem,
-                outputTargetBuildItem,
-                transformedClasses,
-                applicationArchivesBuildItem,
-                packageConfig,
-                applicationInfo,
-                generatedClasses,
-                generatedResources,
-                mergeResources,
-                ignoreResources,
-                mainClassBuildItem,
-                classLoadingConfig,
-                runnerJar);
-
-        return new NativeImageSourceJarBuildItem(runnerJar, null);
     }
 
     /**
@@ -1313,7 +1211,7 @@ public class JarResultBuildStep {
      * So we first try to see if a manifest exists, and otherwise create a new one.
      *
      * <b>BEWARE</b> this method should be invoked after file copy from target/classes and so on.
-     * Otherwise this manifest manipulation will be useless.
+     * Otherwise, this manifest manipulation will be useless.
      */
     private void generateManifest(FileSystem runnerZipFs, final String classPath, PackageConfig config,
             ResolvedDependency appArtifact,
@@ -1557,4 +1455,167 @@ public class JarResultBuildStep {
             return basicFileAttributes.isRegularFile() && path.toString().endsWith(".json");
         }
     }
+
+    private interface Decompiler {
+
+        void init(Context context);
+
+        /**
+         * @return {@code true} if the decompiler was successfully download or already exists
+         */
+        boolean downloadIfNecessary();
+
+        /**
+         * @return {@code true} if the decompilation process was successful
+         */
+        boolean decompile(Path jarToDecompile);
+
+        class Context {
+            final String versionStr;
+            final Path jarLocation;
+            final Path decompiledOutputDir;
+
+            public Context(String versionStr, Path jarLocation, Path decompiledOutputDir) {
+                this.versionStr = versionStr;
+                this.jarLocation = jarLocation;
+                this.decompiledOutputDir = decompiledOutputDir;
+            }
+
+        }
+
+        class FernflowerDecompiler implements Decompiler {
+
+            private Context context;
+            private Path decompilerJar;
+
+            @Override
+            public void init(Context context) {
+                this.context = context;
+                this.decompilerJar = context.jarLocation.resolve(String.format("fernflower-%s.jar", context.versionStr));
+            }
+
+            @Override
+            public boolean downloadIfNecessary() {
+                if (Files.exists(decompilerJar)) {
+                    return true;
+                }
+                String downloadURL = String.format("https://jitpack.io/com/github/fesh0r/fernflower/%s/fernflower-%s.jar",
+                        context.versionStr, context.versionStr);
+                try (BufferedInputStream in = new BufferedInputStream(new URL(downloadURL).openStream());
+                        FileOutputStream fileOutputStream = new FileOutputStream(decompilerJar.toFile())) {
+                    byte[] dataBuffer = new byte[1024];
+                    int bytesRead;
+                    while ((bytesRead = in.read(dataBuffer, 0, 1024)) != -1) {
+                        fileOutputStream.write(dataBuffer, 0, bytesRead);
+                    }
+                    return true;
+                } catch (IOException e) {
+                    log.error("Unable to download Fernflower from " + downloadURL, e);
+                    return false;
+                }
+            }
+
+            @Override
+            public boolean decompile(Path jarToDecompile) {
+                int exitCode;
+                try {
+                    ProcessBuilder processBuilder = new ProcessBuilder(
+                            Arrays.asList("java", "-jar", decompilerJar.toAbsolutePath().toString(),
+                                    jarToDecompile.toAbsolutePath().toString(),
+                                    context.decompiledOutputDir.toAbsolutePath().toString()));
+                    if (log.isDebugEnabled()) {
+                        processBuilder.inheritIO();
+                    } else {
+                        processBuilder.redirectError(ProcessBuilder.Redirect.DISCARD.file())
+                                .redirectOutput(ProcessBuilder.Redirect.DISCARD.file());
+                    }
+                    exitCode = processBuilder.start().waitFor();
+                } catch (Exception e) {
+                    log.error("Failed to launch decompiler.", e);
+                    return false;
+                }
+
+                if (exitCode != 0) {
+                    log.errorf("Fernflower decompiler exited with error code: %d.", exitCode);
+                    return false;
+                }
+
+                String jarFileName = jarToDecompile.getFileName().toString();
+                Path decompiledJar = context.decompiledOutputDir.resolve(jarFileName);
+                try {
+                    ZipUtils.unzip(decompiledJar, context.decompiledOutputDir.resolve(jarFileName.replace(".jar", "")));
+                    Files.deleteIfExists(decompiledJar);
+                } catch (IOException ignored) {
+                    // it doesn't really matter if we can't unzip the jar as we do it merely for user convenience
+                }
+
+                return true;
+            }
+        }
+
+        class QuiltflowerDecompiler implements Decompiler {
+
+            private Context context;
+            private Path decompilerJar;
+
+            @Override
+            public void init(Context context) {
+                this.context = context;
+                this.decompilerJar = context.jarLocation.resolve(String.format("quiltflower-%s.jar", context.versionStr));
+            }
+
+            @Override
+            public boolean downloadIfNecessary() {
+                if (Files.exists(decompilerJar)) {
+                    return true;
+                }
+                String downloadURL = String.format(
+                        "https://github.com/QuiltMC/quiltflower/releases/download/%s/quiltflower-%s.jar",
+                        context.versionStr, context.versionStr);
+                try (BufferedInputStream in = new BufferedInputStream(new URL(downloadURL).openStream());
+                        FileOutputStream fileOutputStream = new FileOutputStream(decompilerJar.toFile())) {
+                    byte[] dataBuffer = new byte[1024];
+                    int bytesRead;
+                    while ((bytesRead = in.read(dataBuffer, 0, 1024)) != -1) {
+                        fileOutputStream.write(dataBuffer, 0, bytesRead);
+                    }
+                    return true;
+                } catch (IOException e) {
+                    log.error("Unable to download Quiltflower from " + downloadURL, e);
+                    return false;
+                }
+            }
+
+            @Override
+            public boolean decompile(Path jarToDecompile) {
+                int exitCode;
+                try {
+                    int dotIndex = jarToDecompile.getFileName().toString().indexOf('.');
+                    String fileName = jarToDecompile.getFileName().toString().substring(0, dotIndex);
+                    ProcessBuilder processBuilder = new ProcessBuilder(
+                            Arrays.asList("java", "-jar", decompilerJar.toAbsolutePath().toString(),
+                                    jarToDecompile.toAbsolutePath().toString(),
+                                    context.decompiledOutputDir.resolve(fileName).toAbsolutePath().toString()));
+                    if (log.isDebugEnabled()) {
+                        processBuilder.inheritIO();
+                    } else {
+                        processBuilder.redirectError(ProcessBuilder.Redirect.DISCARD.file())
+                                .redirectOutput(ProcessBuilder.Redirect.DISCARD.file());
+                    }
+                    exitCode = processBuilder.start().waitFor();
+                } catch (Exception e) {
+                    log.error("Failed to launch decompiler.", e);
+                    return false;
+                }
+
+                if (exitCode != 0) {
+                    log.errorf("Quiltflower decompiler exited with error code: %d.", exitCode);
+                    return false;
+                }
+
+                return true;
+            }
+        }
+    }
+
 }

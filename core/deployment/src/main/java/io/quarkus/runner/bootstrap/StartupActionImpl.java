@@ -59,7 +59,7 @@ public class StartupActionImpl implements StartupAction {
         //test mode only has a single class loader, while dev uses a disposable runtime class loader
         //that is discarded between restarts
         Map<String, byte[]> resources = new HashMap<>(extractGeneratedResources(true));
-        if (curatedApplication.getQuarkusBootstrap().isFlatClassPath()) {
+        if (curatedApplication.isFlatClassPath()) {
             resources.putAll(extractGeneratedResources(false));
             baseClassLoader.reset(resources, transformedClasses);
             runtimeClassLoader = baseClassLoader;
@@ -131,7 +131,7 @@ public class StartupActionImpl implements StartupAction {
                     } finally {
                         ForkJoinClassLoading.setForkJoinClassLoader(ClassLoader.getSystemClassLoader());
                         if (curatedApplication.getQuarkusBootstrap().getMode() == QuarkusBootstrap.Mode.TEST) {
-                            //for tests we just always shut down the curated application, as it is only used once
+                            //for tests, we just always shut down the curated application, as it is only used once
                             //dev mode might be about to restart, so we leave it
                             curatedApplication.close();
                         }
@@ -262,7 +262,7 @@ public class StartupActionImpl implements StartupAction {
                         }
                         if (curatedApplication.getQuarkusBootstrap().getMode() == QuarkusBootstrap.Mode.TEST &&
                                 !curatedApplication.getQuarkusBootstrap().isAuxiliaryApplication()) {
-                            //for tests we just always shut down the curated application, as it is only used once
+                            //for tests, we just always shut down the curated application, as it is only used once
                             //dev mode might be about to restart, so we leave it
                             curatedApplication.close();
                         }

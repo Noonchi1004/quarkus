@@ -27,7 +27,7 @@ public class CreateApp extends BaseCreateCommand {
     TargetGAVGroup gav = new TargetGAVGroup();
 
     @CommandLine.Option(order = 1, paramLabel = "EXTENSION", names = { "-x",
-            "--extension" }, description = "Extension(s) to add to the project.", split = ",")
+            "--extension", "--extensions" }, description = "Extension(s) to add to the project.", split = ",")
     Set<String> extensions = new HashSet<>();
 
     @CommandLine.ArgGroup(order = 2, heading = "%nQuarkus version:%n")
@@ -64,7 +64,7 @@ public class CreateApp extends BaseCreateCommand {
             setCodegenOptions(codeGeneration);
 
             QuarkusCommandInvocation invocation = build(buildTool, targetQuarkusVersion,
-                    propertiesOptions.properties);
+                    propertiesOptions.properties, extensions);
 
             boolean success = true;
 

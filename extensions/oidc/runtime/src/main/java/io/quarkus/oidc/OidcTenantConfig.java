@@ -98,7 +98,7 @@ public class OidcTenantConfig extends OidcCommonConfig {
     public Token token = new Token();
 
     /**
-     * Logout configuration
+     * RP Initiated and BackChannel Logout configuration
      */
     @ConfigItem
     public Logout logout = new Logout();
@@ -171,6 +171,12 @@ public class OidcTenantConfig extends OidcCommonConfig {
         @ConfigItem
         public Map<String, String> extraParams;
 
+        /**
+         * Back-Channel Logout configuration
+         */
+        @ConfigItem
+        public Backchannel backchannel = new Backchannel();
+
         public void setPath(Optional<String> path) {
             this.path = path;
         }
@@ -201,6 +207,31 @@ public class OidcTenantConfig extends OidcCommonConfig {
 
         public void setPostLogoutUriParam(String postLogoutUriParam) {
             this.postLogoutUriParam = postLogoutUriParam;
+        }
+
+        public Backchannel getBackchannel() {
+            return backchannel;
+        }
+
+        public void setBackchannel(Backchannel backchannel) {
+            this.backchannel = backchannel;
+        }
+    }
+
+    @ConfigGroup
+    public static class Backchannel {
+        /**
+         * The relative path of the Back-Channel Logout endpoint at the application.
+         */
+        @ConfigItem
+        public Optional<String> path = Optional.empty();
+
+        public void setPath(Optional<String> path) {
+            this.path = path;
+        }
+
+        public String getPath() {
+            return path.get();
         }
     }
 
@@ -511,7 +542,7 @@ public class OidcTenantConfig extends OidcCommonConfig {
          * If this property is set to 'true' then the original request URI which was used before
          * the authentication will be restored after the user has been redirected back to the application.
          *
-         * Note if `redirectPath` property is not set the the original request URI will be restored even if this property is
+         * Note if `redirectPath` property is not set, the original request URI will be restored even if this property is
          * disabled.
          */
         @ConfigItem(defaultValue = "false")
@@ -530,7 +561,7 @@ public class OidcTenantConfig extends OidcCommonConfig {
          * 'error_description'
          * parameters, instead of the expected authorization 'code'.
          *
-         * If this property is set then the user will be redirected to the endpoint which can return a user friendly
+         * If this property is set then the user will be redirected to the endpoint which can return a user-friendly
          * error description page. It has to start from a forward slash and will be appended to the request URI's host and port.
          * For example, if it is set as '/error' and the current request URI is
          * 'https://localhost:8080/callback?error=invalid_scope'
@@ -893,6 +924,24 @@ public class OidcTenantConfig extends OidcCommonConfig {
         public OptionalInt lifespanGrace = OptionalInt.empty();
 
         /**
+         * Token age.
+         *
+         * It allows for the number of seconds to be specified that must not elapse since the `iat` (issued at) time.
+         * A small leeway to account for clock skew which can be configured with 'quarkus.oidc.token.lifespan-grace' to verify
+         * the token expiry time
+         * can also be used to verify the token age property.
+         *
+         * Note that setting this property does not relax the requirement that Bearer and Code Flow JWT tokens
+         * must have a valid ('exp') expiry claim value. The only exception where setting this property relaxes the requirement
+         * is when a logout token is sent with a back-channel logout request since the current
+         * OpenId Connect Back-Channel specification does not explicitly require the logout tokens to contain an 'exp' claim.
+         * However, even if the current logout token is allowed to have no 'exp' claim, the `exp` claim will be still verified
+         * if the logout token contains it.
+         */
+        @ConfigItem
+        public Optional<Duration> age = Optional.empty();
+
+        /**
          * Name of the claim which contains a principal name. By default, the 'upn', 'preferred_username' and `sub` claims are
          * checked.
          */
@@ -1045,6 +1094,14 @@ public class OidcTenantConfig extends OidcCommonConfig {
         public void setAllowOpaqueTokenIntrospection(boolean allowOpaqueTokenIntrospection) {
             this.allowOpaqueTokenIntrospection = allowOpaqueTokenIntrospection;
         }
+
+        public Optional<Duration> getAge() {
+            return age;
+        }
+
+        public void setAge(Duration age) {
+            this.age = Optional.of(age);
+        }
     }
 
     public static enum ApplicationType {
@@ -1081,6 +1138,7 @@ public class OidcTenantConfig extends OidcCommonConfig {
         GITHUB,
         GOOGLE,
         MICROSOFT,
+        SPOTIFY,
         TWITTER
     }
 

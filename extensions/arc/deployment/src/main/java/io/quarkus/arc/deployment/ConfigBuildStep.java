@@ -68,6 +68,7 @@ import io.quarkus.deployment.recording.RecorderContext;
 import io.quarkus.gizmo.ResultHandle;
 import io.quarkus.runtime.annotations.ConfigPhase;
 import io.smallrye.config.ConfigMappings.ConfigClassWithPrefix;
+import io.smallrye.config.WithConverter;
 import io.smallrye.config.inject.ConfigProducer;
 
 /**
@@ -83,6 +84,7 @@ public class ConfigBuildStep {
     private static final DotName LIST_NAME = DotName.createSimple(List.class.getName());
     private static final DotName SUPPLIER_NAME = DotName.createSimple(Supplier.class.getName());
     private static final DotName CONFIG_VALUE_NAME = DotName.createSimple(io.smallrye.config.ConfigValue.class.getName());
+    private static final DotName WITH_CONVERTER = DotName.createSimple(WithConverter.class.getName());
 
     @BuildStep
     void additionalBeans(BuildProducer<AdditionalBeanBuildItem> additionalBeans) {
@@ -106,7 +108,7 @@ public class ConfigBuildStep {
             AnnotationInstance configProperty = injectionPoint.getRequiredQualifier(MP_CONFIG_PROPERTY_NAME);
             if (configProperty != null) {
                 // Register a custom bean for injection points that are not handled by ConfigProducer
-                Type injectedType = injectionPoint.getType();
+                Type injectedType = injectionPoint.getRequiredType();
                 if (!isHandledByProducers(injectedType)) {
                     customBeanTypes.add(injectedType);
                 }
@@ -354,6 +356,19 @@ public class ConfigBuildStep {
     }
 
     @BuildStep
+    void registerConfigMappingConverters(CombinedIndexBuildItem indexBuildItem,
+            BuildProducer<ReflectiveClassBuildItem> producer) {
+
+        String[] valueTypes = indexBuildItem.getIndex().getAnnotations(WITH_CONVERTER).stream()
+                .map(i -> i.value().asClass().name().toString())
+                .toArray(String[]::new);
+        if (valueTypes.length > 0) {
+            producer.produce(
+                    ReflectiveClassBuildItem.builder(valueTypes).constructors(true).methods(false).fields(false).build());
+        }
+    }
+
+    @BuildStep
     void validateConfigMappingsInjectionPoints(
             ArcConfig arcConfig,
             ValidationPhaseBuildItem validationPhase,
@@ -375,7 +390,7 @@ public class ConfigBuildStep {
                 if (target.kind().equals(FIELD)) {
                     mapping = target.asField().annotation(CONFIG_MAPPING_NAME);
                 } else if (target.kind().equals(METHOD)) {
-                    List<Type> parameters = target.asMethod().parameters();
+                    List<Type> parameters = target.asMethod().parameterTypes();
                     for (int i = 0; i < parameters.size(); i++) {
                         Type parameter = parameters.get(i);
                         if (parameter.name().equals(type.name())) {

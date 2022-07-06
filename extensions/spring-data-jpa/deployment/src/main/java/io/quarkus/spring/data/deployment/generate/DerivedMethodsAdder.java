@@ -89,7 +89,7 @@ public class DerivedMethodsAdder extends AbstractMethodsAdder {
 
             Type returnType = method.returnType();
 
-            List<Type> parameters = method.parameters();
+            List<Type> parameters = method.parameterTypes();
             String[] parameterTypesStr = new String[parameters.size()];
             List<Integer> queryParameterIndexes = new ArrayList<>(parameters.size());
             Integer pageableParameterIndex = null;
@@ -326,7 +326,7 @@ public class DerivedMethodsAdder extends AbstractMethodsAdder {
             for (String queryMethod : queryMethods) {
                 try (MethodCreator convert = implClassCreator.getMethodCreator("convert_" + queryMethod,
                         implName.toString(), entityClassInfo.name().toString())) {
-                    convert.setModifiers(Modifier.STATIC);
+                    convert.setModifiers(Modifier.STATIC | Modifier.PUBLIC);
 
                     ResultHandle newObject = convert.newInstance(MethodDescriptor.ofConstructor(implName.toString()));
 

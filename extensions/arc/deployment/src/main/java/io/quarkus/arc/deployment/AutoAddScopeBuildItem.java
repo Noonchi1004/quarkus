@@ -117,7 +117,7 @@ public final class AutoAddScopeBuildItem extends MultiBuildItem {
          * annotation is not added.
          * <p>
          * Note that the detection algorithm is just the best effort. Some inheritance rules defined by the spec are not
-         * followed, e.g. per spec an initializer method is only inherited if not overriden. This method merely scans the
+         * followed, e.g. per spec an initializer method is only inherited if not overridden. This method merely scans the
          * annotations.
          *
          * @return self
@@ -174,7 +174,7 @@ public final class AutoAddScopeBuildItem extends MultiBuildItem {
         public Builder containsAnnotations(DotName... annotationNames) {
             return and((clazz, annotations, index) -> {
                 for (DotName annotation : annotationNames) {
-                    if (clazz.annotations().containsKey(annotation)) {
+                    if (clazz.annotationsMap().containsKey(annotation)) {
                         return true;
                     }
                 }

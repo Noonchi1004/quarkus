@@ -172,6 +172,11 @@ public final class UnremovableBeanBuildItem extends MultiBuildItem {
             return bean.getBeanClass().toString().equals(className);
         }
 
+        @Override
+        public String toString() {
+            return "BeanClassNameExclusion [className=" + className + "]";
+        }
+
     }
 
     public static class BeanClassNamesExclusion implements Predicate<BeanInfo> {
@@ -185,6 +190,11 @@ public final class UnremovableBeanBuildItem extends MultiBuildItem {
         @Override
         public boolean test(BeanInfo bean) {
             return classNames.contains(bean.getBeanClass().toString());
+        }
+
+        @Override
+        public String toString() {
+            return "BeanClassNamesExclusion [classNames=" + classNames + "]";
         }
 
     }
@@ -202,6 +212,11 @@ public final class UnremovableBeanBuildItem extends MultiBuildItem {
             return bean.getTypes().stream().anyMatch(t -> dotName.equals(t.name()));
         }
 
+        @Override
+        public String toString() {
+            return "BeanTypeExclusion [dotName=" + dotName + "]";
+        }
+
     }
 
     public static class BeanTypesExclusion implements Predicate<BeanInfo> {
@@ -215,6 +230,11 @@ public final class UnremovableBeanBuildItem extends MultiBuildItem {
         @Override
         public boolean test(BeanInfo bean) {
             return bean.getTypes().stream().anyMatch(t -> dotNames.contains(t.name()));
+        }
+
+        @Override
+        public String toString() {
+            return "BeanTypesExclusion [dotNames=" + dotNames + "]";
         }
 
     }
@@ -238,7 +258,7 @@ public final class UnremovableBeanBuildItem extends MultiBuildItem {
         @Override
         public boolean test(BeanInfo bean) {
             if (bean.isClassBean()) {
-                Map<DotName, List<AnnotationInstance>> annotations = bean.getTarget().get().asClass().annotations();
+                Map<DotName, List<AnnotationInstance>> annotations = bean.getTarget().get().asClass().annotationsMap();
                 if (name != null) {
                     return annotations.containsKey(name);
                 } else {
@@ -246,6 +266,11 @@ public final class UnremovableBeanBuildItem extends MultiBuildItem {
                 }
             }
             return false;
+        }
+
+        @Override
+        public String toString() {
+            return "BeanClassAnnotationExclusion [nameStartsWith=" + nameStartsWith + ", name=" + name + "]";
         }
 
     }

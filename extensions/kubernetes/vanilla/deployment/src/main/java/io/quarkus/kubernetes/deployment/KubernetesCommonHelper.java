@@ -84,7 +84,7 @@ public class KubernetesCommonHelper {
             Optional<CustomProjectRootBuildItem> customProjectRoot, OutputTargetBuildItem outputTarget,
             PackageConfig packageConfig) {
         return createProject(app, customProjectRoot, outputTarget.getOutputDirectory()
-                .resolve(String.format(OUTPUT_ARTIFACT_FORMAT, outputTarget.getBaseName(), packageConfig.runnerSuffix)));
+                .resolve(String.format(OUTPUT_ARTIFACT_FORMAT, outputTarget.getBaseName(), packageConfig.getRunnerSuffix())));
     }
 
     public static Optional<Project> createProject(ApplicationInfoBuildItem app,
@@ -183,15 +183,17 @@ public class KubernetesCommonHelper {
 
         //Handle RBAC
         if (!roleBindings.isEmpty()) {
-            result.add(new DecoratorBuildItem(new ApplyServiceAccountNameDecorator()));
-            result.add(new DecoratorBuildItem(new AddServiceAccountResourceDecorator()));
-            roles.forEach(r -> result.add(new DecoratorBuildItem(new AddRoleResourceDecorator(name, r))));
+            result.add(new DecoratorBuildItem(target, new ApplyServiceAccountNameDecorator(name, name)));
+            result.add(new DecoratorBuildItem(target, new AddServiceAccountResourceDecorator(name)));
+            roles.forEach(r -> result.add(new DecoratorBuildItem(target, new AddRoleResourceDecorator(name, r))));
             roleBindings.forEach(rb -> {
-                result.add(new DecoratorBuildItem(new AddRoleBindingResourceDecorator(rb.getName(), null, rb.getRole(),
-                        rb.isClusterWide() ? AddRoleBindingResourceDecorator.RoleKind.ClusterRole
-                                : AddRoleBindingResourceDecorator.RoleKind.Role)));
+                String rbName = Strings.isNotNullOrEmpty(rb.getName()) ? rb.getName() : name;
+                result.add(new DecoratorBuildItem(target,
+                        new AddRoleBindingResourceDecorator(rbName, name, rb.getRole(),
+                                rb.isClusterWide() ? AddRoleBindingResourceDecorator.RoleKind.ClusterRole
+                                        : AddRoleBindingResourceDecorator.RoleKind.Role)));
                 labels.forEach(l -> {
-                    result.add(new DecoratorBuildItem(
+                    result.add(new DecoratorBuildItem(target,
                             new AddLabelDecorator(rb.getName(), l.getKey(), l.getValue(), "RoleBinding")));
                 });
             });

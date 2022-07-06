@@ -2,6 +2,7 @@ package io.quarkus.kotlin.deployment;
 
 import static io.quarkus.deployment.builditem.nativeimage.NativeImageResourcePatternsBuildItem.builder;
 
+import io.quarkus.bootstrap.classloading.QuarkusClassLoader;
 import io.quarkus.deployment.Feature;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
@@ -27,16 +28,16 @@ public class KotlinProcessor {
      */
     @BuildStep
     void registerKotlinJacksonModule(BuildProducer<ClassPathJacksonModuleBuildItem> classPathJacksonModules) {
-        try {
-            Class.forName(KOTLIN_JACKSON_MODULE, false, Thread.currentThread().getContextClassLoader());
-            classPathJacksonModules.produce(new ClassPathJacksonModuleBuildItem(KOTLIN_JACKSON_MODULE));
-        } catch (Exception ignored) {
+        if (!QuarkusClassLoader.isClassPresentAtRuntime(KOTLIN_JACKSON_MODULE)) {
+            return;
         }
+
+        classPathJacksonModules.produce(new ClassPathJacksonModuleBuildItem(KOTLIN_JACKSON_MODULE));
     }
 
     /**
      * Kotlin data classes that have multiple constructors need to have their final fields writable,
-     * otherwise creating a instance of them with default values, fails in native mode
+     * otherwise creating an instance of them with default values fails in native mode.
      */
     @BuildStep
     ReflectiveClassFinalFieldsWritablePredicateBuildItem dataClassPredicate() {

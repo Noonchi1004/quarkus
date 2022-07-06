@@ -2,9 +2,7 @@ package io.quarkus.datasource.deployment.spi;
 
 import java.io.Closeable;
 import java.time.Duration;
-import java.util.Map;
 import java.util.Optional;
-import java.util.OptionalInt;
 
 import io.quarkus.runtime.LaunchMode;
 
@@ -12,10 +10,9 @@ public interface DevServicesDatasourceProvider {
 
     RunningDevServicesDatasource startDatabase(Optional<String> username, Optional<String> password,
             Optional<String> datasourceName,
-            Optional<String> imageName,
-            Map<String, String> containerProperties,
-            Map<String, String> additionalJdbcUrlProperties,
-            OptionalInt port, LaunchMode launchMode, Optional<Duration> startupTimeout);
+            DevServicesDatasourceContainerConfig devServicesDatasourceContainerConfig,
+            LaunchMode launchMode,
+            Optional<Duration> startupTimeout);
 
     default boolean isDockerRequired() {
         return true;
@@ -24,14 +21,17 @@ public interface DevServicesDatasourceProvider {
     class RunningDevServicesDatasource {
 
         private final String id;
-        private final String url;
+        private final String jdbcUrl;
+        private final String reactiveUrl;
         private final String username;
         private final String password;
         private final Closeable closeTask;
 
-        public RunningDevServicesDatasource(String id, String url, String username, String password, Closeable closeTask) {
+        public RunningDevServicesDatasource(String id, String jdbcUrl, String reactiveUrl, String username, String password,
+                Closeable closeTask) {
             this.id = id;
-            this.url = url;
+            this.jdbcUrl = jdbcUrl;
+            this.reactiveUrl = reactiveUrl;
             this.username = username;
             this.password = password;
             this.closeTask = closeTask;
@@ -41,8 +41,12 @@ public interface DevServicesDatasourceProvider {
             return id;
         }
 
-        public String getUrl() {
-            return url;
+        public String getJdbcUrl() {
+            return jdbcUrl;
+        }
+
+        public String getReactiveUrl() {
+            return reactiveUrl;
         }
 
         public Closeable getCloseTask() {

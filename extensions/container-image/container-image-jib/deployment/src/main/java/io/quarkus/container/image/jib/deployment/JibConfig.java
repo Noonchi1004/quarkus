@@ -176,15 +176,15 @@ public class JibConfig {
     public Optional<Set<String>> platforms;
 
     /**
-     * The path of a file that will be written containing the digest of the generated image.
-     * If the path is relative, is writen to the output directory of the build tool
+     * The path of a file in which the digest of the generated image will be written.
+     * If the path is relative, the base path is the output directory of the build tool.
      */
     @ConfigItem(defaultValue = "jib-image.digest")
     public String imageDigestFile;
 
     /**
-     * The path of a file that will be written containing the id of the generated image.
-     * If the path is relative, is writen to the output directory of the build tool
+     * The path of a file in which the id of the generated image will be written.
+     * If the path is relative, the base path is the output directory of the build tool.
      */
     @ConfigItem(defaultValue = "jib-image.id")
     public String imageIdFile;
@@ -201,6 +201,13 @@ public class JibConfig {
      */
     @ConfigItem
     public Optional<String> dockerExecutableName;
+
+    /**
+     * Sets environment variables used by the Docker executable. This is only used by Jib
+     * when the container image is being built locally.
+     */
+    @ConfigItem
+    public Map<String, String> dockerEnvironment;
 
     /**
      * Whether to set the creation time to the actual build time. Otherwise, the creation time

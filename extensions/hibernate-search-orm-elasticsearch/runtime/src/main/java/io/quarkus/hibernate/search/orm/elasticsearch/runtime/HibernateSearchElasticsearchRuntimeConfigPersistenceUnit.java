@@ -1,6 +1,7 @@
 package io.quarkus.hibernate.search.orm.elasticsearch.runtime;
 
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -39,7 +40,7 @@ public class HibernateSearchElasticsearchRuntimeConfigPersistenceUnit {
      */
     @ConfigItem(name = "elasticsearch")
     @ConfigDocSection
-    public ElasticsearchNamedBackendsRuntimeConfig namedBackends;
+    ElasticsearchNamedBackendsRuntimeConfig namedBackends;
 
     /**
      * Configuration for automatic creation and validation of the Elasticsearch schema:
@@ -65,6 +66,17 @@ public class HibernateSearchElasticsearchRuntimeConfigPersistenceUnit {
      */
     @ConfigItem
     MultiTenancyConfig multiTenancy;
+
+    Map<String, ElasticsearchBackendRuntimeConfig> getAllBackendConfigsAsMap() {
+        Map<String, ElasticsearchBackendRuntimeConfig> map = new LinkedHashMap<>();
+        if (defaultBackend != null) {
+            map.put(null, defaultBackend);
+        }
+        if (namedBackends != null) {
+            map.putAll(namedBackends.backends);
+        }
+        return map;
+    }
 
     @ConfigGroup
     public static class ElasticsearchNamedBackendsRuntimeConfig {
@@ -319,6 +331,14 @@ public class HibernateSearchElasticsearchRuntimeConfigPersistenceUnit {
          * link:{hibernate-search-doc-prefix}#mapper-orm-indexing-automatic-synchronization[this section of the reference documentation]
          * for more information.
          *
+         * [NOTE]
+         * ====
+         * Instead of setting this configuration property,
+         * you can simply annotate your custom `AutomaticIndexingSynchronizationStrategy` implementation with `@SearchExtension`
+         * and leave the configuration property unset: Hibernate Search will use the annotated implementation automatically.
+         * If this configuration property is set, it takes precedence over any `@SearchExtension` annotation.
+         * ====
+         *
          * @asciidoclet
          */
         // @formatter:on
@@ -380,7 +400,7 @@ public class HibernateSearchElasticsearchRuntimeConfigPersistenceUnit {
          *
          * For indexes that already exist, do nothing: assume that their schema matches Hibernate Search's expectations.
          *
-         * !create-or-validate (**default**)
+         * !create-or-validate (**default** unless using Dev Services)
          * !For indexes that do not exist, create them along with their schema.
          *
          * For indexes that already exist, validate that their schema matches Hibernate Search's expectations.
@@ -402,7 +422,7 @@ public class HibernateSearchElasticsearchRuntimeConfigPersistenceUnit {
          *
          * For indexes that already exist, drop them, then create them along with their schema.
          *
-         * !drop-and-create-and-drop
+         * !drop-and-create-and-drop (**default** when using Dev Services)
          * !For indexes that do not exist, create them along with their schema.
          *
          * For indexes that already exist, drop them, then create them along with their schema.
@@ -416,7 +436,7 @@ public class HibernateSearchElasticsearchRuntimeConfigPersistenceUnit {
          * @asciidoclet
          */
         // @formatter:on
-        @ConfigItem(defaultValue = "create-or-validate")
+        @ConfigItem(defaultValue = "create-or-validate", defaultValueDocumentation = "drop-and-create-and-drop when using Dev Services; create-or-validate otherwise")
         SchemaManagementStrategyName strategy;
 
     }

@@ -19,6 +19,7 @@ import io.opentelemetry.context.Scope;
 import io.opentelemetry.context.propagation.TextMapSetter;
 import io.opentelemetry.instrumentation.api.instrumenter.Instrumenter;
 import io.opentelemetry.instrumentation.api.instrumenter.InstrumenterBuilder;
+import io.opentelemetry.instrumentation.api.instrumenter.rpc.RpcClientAttributesExtractor;
 import io.quarkus.grpc.GlobalInterceptor;
 
 @Singleton
@@ -35,7 +36,7 @@ public class GrpcTracingClientInterceptor implements ClientInterceptor {
                 INSTRUMENTATION_NAME,
                 new GrpcSpanNameExtractor());
 
-        builder.addAttributesExtractor(new GrpcAttributesExtractor())
+        builder.addAttributesExtractor(RpcClientAttributesExtractor.create(GrpcAttributesGetter.INSTANCE))
                 .addAttributesExtractor(new GrpcStatusCodeExtractor())
                 .setSpanStatusExtractor(new GrpcSpanStatusExtractor());
 
@@ -48,22 +49,16 @@ public class GrpcTracingClientInterceptor implements ClientInterceptor {
 
         GrpcRequest grpcRequest = GrpcRequest.client(method);
         Context parentContext = Context.current();
-        Context spanContext = null;
-        Scope scope = null;
         boolean shouldStart = instrumenter.shouldStart(parentContext, grpcRequest);
         if (shouldStart) {
-            spanContext = instrumenter.start(parentContext, grpcRequest);
-            scope = spanContext.makeCurrent();
-        }
-
-        try {
-            ClientCall<ReqT, RespT> clientCall = next.newCall(method, callOptions);
-            return new TracingClientCall<>(clientCall, spanContext, grpcRequest);
-        } finally {
-            if (scope != null) {
-                scope.close();
+            Context spanContext = instrumenter.start(parentContext, grpcRequest);
+            try (Scope ignored = spanContext.makeCurrent()) {
+                ClientCall<ReqT, RespT> clientCall = next.newCall(method, callOptions);
+                return new TracingClientCall<>(clientCall, spanContext, grpcRequest);
             }
         }
+
+        return next.newCall(method, callOptions);
     }
 
     private enum GrpcTextMapSetter implements TextMapSetter<GrpcRequest> {

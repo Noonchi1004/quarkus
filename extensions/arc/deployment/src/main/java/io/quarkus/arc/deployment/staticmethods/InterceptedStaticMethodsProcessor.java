@@ -90,7 +90,7 @@ public class InterceptedStaticMethodsProcessor {
             InterceptorResolverBuildItem interceptorResolver, TransformedAnnotationsBuildItem transformedAnnotations,
             BuildProducer<UnremovableBeanBuildItem> unremovableBeans) {
 
-        // In this step we collect all intercepted static methods, ie. static methods annotated with interceptor bindings
+        // In this step we collect all intercepted static methods, i.e. static methods annotated with interceptor bindings
         Set<DotName> interceptorBindings = interceptorResolver.getInterceptorBindings();
 
         for (ClassInfo clazz : beanArchiveIndex.getIndex().getKnownClasses()) {
@@ -187,7 +187,7 @@ public class InterceptedStaticMethodsProcessor {
 
             List<String> initMethods = new ArrayList<>();
             for (InterceptedStaticMethodBuildItem interceptedStaticMethod : entry.getValue()) {
-                initMethods.add(implementInit(beanArchiveIndex.getIndex(), classOutput, initializer, interceptedStaticMethod,
+                initMethods.add(implementInit(beanArchiveIndex.getIndex(), initializer, interceptedStaticMethod,
                         reflectiveMethods, phase.getBeanProcessor()));
                 implementForward(initializer, interceptedStaticMethod);
             }
@@ -237,7 +237,7 @@ public class InterceptedStaticMethodsProcessor {
     private void implementForward(ClassCreator initializer,
             InterceptedStaticMethodBuildItem interceptedStaticMethod) {
         MethodInfo method = interceptedStaticMethod.getMethod();
-        List<Type> params = method.parameters();
+        List<Type> params = method.parameterTypes();
         Object[] paramTypes = new String[params.size()];
         for (int i = 0; i < paramTypes.length; ++i) {
             paramTypes[i] = DescriptorUtils.typeToString(params.get(i));
@@ -255,7 +255,7 @@ public class InterceptedStaticMethodsProcessor {
         forward.returnValue(ret);
     }
 
-    private String implementInit(IndexView index, ClassOutput classOutput, ClassCreator initializer,
+    private String implementInit(IndexView index, ClassCreator initializer,
             InterceptedStaticMethodBuildItem interceptedStaticMethod,
             BuildProducer<ReflectiveMethodBuildItem> reflectiveMethods, BeanProcessor beanProcessor) {
 
@@ -295,9 +295,9 @@ public class InterceptedStaticMethodsProcessor {
         ResultHandle[] paramsHandles = new ResultHandle[3];
         paramsHandles[0] = init.loadClassFromTCCL(method.declaringClass().name().toString());
         paramsHandles[1] = init.load(method.name());
-        if (!method.parameters().isEmpty()) {
-            ResultHandle paramsArray = init.newArray(Class.class, init.load(method.parameters().size()));
-            for (ListIterator<Type> iterator = method.parameters().listIterator(); iterator.hasNext();) {
+        if (!method.parameterTypes().isEmpty()) {
+            ResultHandle paramsArray = init.newArray(Class.class, init.load(method.parametersCount()));
+            for (ListIterator<Type> iterator = method.parameterTypes().listIterator(); iterator.hasNext();) {
                 init.writeArrayValue(paramsArray, iterator.nextIndex(),
                         init.loadClassFromTCCL(iterator.next().name().toString()));
             }
@@ -312,13 +312,13 @@ public class InterceptedStaticMethodsProcessor {
         ResultHandle bindingsHandle;
         if (bindings.size() == 1) {
             bindingsHandle = init.invokeStaticMethod(MethodDescriptors.COLLECTIONS_SINGLETON,
-                    createBindingLiteral(index, classOutput, init, bindings.iterator().next(),
+                    createBindingLiteral(index, init, bindings.iterator().next(),
                             beanProcessor.getAnnotationLiteralProcessor()));
         } else {
             bindingsHandle = init.newInstance(MethodDescriptor.ofConstructor(HashSet.class));
             for (AnnotationInstance binding : bindings) {
                 init.invokeInterfaceMethod(MethodDescriptors.SET_ADD, bindingsHandle,
-                        createBindingLiteral(index, classOutput, init, binding, beanProcessor.getAnnotationLiteralProcessor()));
+                        createBindingLiteral(index, init, binding, beanProcessor.getAnnotationLiteralProcessor()));
             }
         }
 
@@ -343,11 +343,10 @@ public class InterceptedStaticMethodsProcessor {
         return name;
     }
 
-    private ResultHandle createBindingLiteral(IndexView index, ClassOutput classOutput, BytecodeCreator init,
-            AnnotationInstance binding, AnnotationLiteralProcessor annotationLiteralProcessor) {
+    private ResultHandle createBindingLiteral(IndexView index, BytecodeCreator init,
+            AnnotationInstance binding, AnnotationLiteralProcessor annotationLiterals) {
         ClassInfo bindingClass = index.getClassByName(binding.name());
-        return annotationLiteralProcessor.process(init, classOutput, bindingClass, binding,
-                "io.quarkus.arc.runtime");
+        return annotationLiterals.create(init, bindingClass, binding);
     }
 
     private ResultHandle createInterceptorInvocation(InterceptorInfo interceptor, BytecodeCreator init,
@@ -380,7 +379,7 @@ public class InterceptedStaticMethodsProcessor {
         // Function<InvocationContext, Object> forward = ctx -> Foo.interceptMe_original((java.lang.String)ctx.getParameters()[0])
         FunctionCreator func = init.createFunction(Function.class);
         BytecodeCreator funcBytecode = func.getBytecode();
-        List<Type> paramTypes = method.parameters();
+        List<Type> paramTypes = method.parameterTypes();
         ResultHandle[] paramHandles;
         String[] params;
         if (paramTypes.isEmpty()) {
@@ -492,7 +491,7 @@ public class InterceptedStaticMethodsProcessor {
             // Invoke the initializer, i.e. Foo_InterceptorInitializer.hash("ping")
             MethodDescriptor descriptor = MethodDescriptor.of(interceptedStaticMethod.getMethod());
             int paramSlot = 0;
-            for (Type paramType : interceptedStaticMethod.getMethod().parameters()) {
+            for (Type paramType : interceptedStaticMethod.getMethod().parameterTypes()) {
                 superVisitor.visitIntInsn(AsmUtil.getLoadOpcode(paramType), paramSlot);
                 paramSlot += AsmUtil.getParameterSize(paramType);
             }

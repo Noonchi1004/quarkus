@@ -72,6 +72,13 @@ public final class SmallRyeOpenApiConfig {
     public boolean autoAddTags;
 
     /**
+     * Setting it to `true` will automatically add a default server to the schema if none is provided,
+     * using the current running server host and port.
+     */
+    @ConfigItem
+    public Optional<Boolean> autoAddServer;
+
+    /**
      * This will automatically add security based on the security extension included (if any).
      */
     @ConfigItem(defaultValue = "true")
@@ -90,10 +97,22 @@ public final class SmallRyeOpenApiConfig {
     public String jwtSecuritySchemeValue;
 
     /**
-     * Add a scheme value to the JWT Security Scheme
+     * Add a bearer format the JWT Security Scheme
      */
     @ConfigItem(defaultValue = "JWT")
     public String jwtBearerFormat;
+
+    /**
+     * Add a scheme value to the OAuth2 opaque token Security Scheme
+     */
+    @ConfigItem(defaultValue = "bearer")
+    public String oauth2SecuritySchemeValue;
+
+    /**
+     * Add a scheme value to OAuth2 opaque token Security Scheme
+     */
+    @ConfigItem(defaultValue = "Opaque")
+    public String oauth2BearerFormat;
 
     /**
      * Add a openIdConnectUrl value to the OIDC Security Scheme
@@ -194,6 +213,7 @@ public final class SmallRyeOpenApiConfig {
     public enum SecurityScheme {
         basic,
         jwt,
+        oauth2,
         oidc,
         oauth2Implicit
     }

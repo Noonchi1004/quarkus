@@ -2,7 +2,6 @@ package io.quarkus.qute;
 
 import static io.quarkus.qute.Booleans.isFalsy;
 
-import io.quarkus.qute.SectionHelperFactory.ParserDelegate;
 import io.quarkus.qute.SectionHelperFactory.SectionInitContext;
 import java.math.BigDecimal;
 import java.math.BigInteger;
@@ -11,7 +10,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.ListIterator;
 import java.util.Objects;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 /**
@@ -27,9 +25,9 @@ public class IfSectionHelper implements SectionHelper {
 
     IfSectionHelper(SectionInitContext context) {
         List<ConditionBlock> conditionBlocks = new ArrayList<>();
-        for (SectionBlock part : context.getBlocks()) {
-            if (SectionHelperFactory.MAIN_BLOCK_NAME.equals(part.label) || ELSE.equals(part.label)) {
-                conditionBlocks.add(new ConditionBlock(part, context));
+        for (SectionBlock block : context.getBlocks()) {
+            if (SectionHelperFactory.MAIN_BLOCK_NAME.equals(block.label) || ELSE.equals(block.label)) {
+                conditionBlocks.add(new ConditionBlock(block, context));
             }
         }
         if (conditionBlocks.size() == 1) {
@@ -204,7 +202,7 @@ public class IfSectionHelper implements SectionHelper {
 
         public ConditionBlock(SectionBlock block, SectionInitContext context) {
             this.section = block;
-            List<Object> params = parseParams(new ArrayList<>(block.parameters.values()), context);
+            List<Object> params = parseParams(new ArrayList<>(block.parameters.values()), block);
             if (!params.isEmpty() && !SectionHelperFactory.MAIN_BLOCK_NAME.equals(block.label)) {
                 params = params.subList(1, params.size());
             }
@@ -302,24 +300,22 @@ public class IfSectionHelper implements SectionHelper {
                 // There is no need to continue with the next operand
                 return CompletedStage.of(shortResult);
             } else {
-                CompletableFuture<Object> result = new CompletableFuture<>();
                 Object literalVal = next.getLiteralValue();
                 if (literalVal != null) {
                     // A literal value does not need to be evaluated
                     if (operator == Operator.NOT) {
                         literalVal = logicalComplement(literalVal);
                     }
-                    processConditionValue(context, operator, previousValue, literalVal, result, iter);
+                    return processConditionValue(context, operator, previousValue, literalVal, iter);
                 } else {
-                    next.evaluate(context).whenComplete((r, t) -> {
-                        if (t != null) {
-                            result.completeExceptionally(t);
-                        } else {
-                            processConditionValue(context, operator, previousValue, r, result, iter);
-                        }
-                    });
+                    CompletionStage<Object> ret = next.evaluate(context);
+                    if (ret instanceof CompletedStage) {
+                        return processConditionValue(context, operator, previousValue, ((CompletedStage<Object>) ret).get(),
+                                iter);
+                    } else {
+                        return ret.thenCompose(r -> processConditionValue(context, operator, previousValue, r, iter));
+                    }
                 }
-                return result;
             }
         }
 
@@ -338,8 +334,8 @@ public class IfSectionHelper implements SectionHelper {
             return "CompositeCondition [conditions=" + conditions.size() + ", operator=" + operator + "]";
         }
 
-        void processConditionValue(SectionResolutionContext context, Operator operator,
-                Object previousValue, Object conditionValue, CompletableFuture<Object> result, Iterator<Condition> iter) {
+        CompletionStage<Object> processConditionValue(SectionResolutionContext context, Operator operator,
+                Object previousValue, Object conditionValue, Iterator<Condition> iter) {
             Object val;
             if (operator == null || !operator.isBinary()) {
                 val = conditionValue;
@@ -355,20 +351,13 @@ public class IfSectionHelper implements SectionHelper {
                     }
                     val = operator.evaluate(localValue, conditionValue);
                 } catch (Throwable e) {
-                    result.completeExceptionally(e);
-                    throw e;
+                    return CompletedStage.failure(e);
                 }
             }
             if (!iter.hasNext()) {
-                result.complete(val);
+                return CompletedStage.of(val);
             } else {
-                evaluateNext(context, val, iter).whenComplete((r2, t2) -> {
-                    if (t2 != null) {
-                        result.completeExceptionally(t2);
-                    } else {
-                        result.complete(r2);
-                    }
-                });
+                return evaluateNext(context, val, iter);
             }
         }
 
@@ -501,9 +490,9 @@ public class IfSectionHelper implements SectionHelper {
 
     }
 
-    static List<Object> parseParams(List<Object> params, ParserDelegate parserDelegate) {
+    static <B extends ErrorInitializer & WithOrigin> List<Object> parseParams(List<Object> params, B block) {
 
-        replaceOperatorsAndCompositeParams(params, parserDelegate);
+        replaceOperatorsAndCompositeParams(params, block);
         int highestPrecedence = getHighestPrecedence(params);
 
         if (!isGroupingNeeded(params)) {
@@ -535,7 +524,7 @@ public class IfSectionHelper implements SectionHelper {
                     if (prevIdx > lastGroupdIdx) {
                         int from = lastGroupdIdx > 0 ? lastGroupdIdx + 1 : 0;
                         int to = op.isBinary() ? prevIdx : prevIdx + 1;
-                        params.subList(from, to).forEach(ret::add);
+                        ret.addAll(params.subList(from, to));
                     }
                 } else if (op.precedence < highestPrecedence) {
                     if (highestGroup != null) {
@@ -555,19 +544,29 @@ public class IfSectionHelper implements SectionHelper {
         } else {
             // Add all remaining non-grouped elements
             if (lastGroupdIdx + 1 != params.size()) {
-                params.subList(lastGroupdIdx + 1, params.size()).forEach(ret::add);
+                ret.addAll(params.subList(lastGroupdIdx + 1, params.size()));
             }
         }
-        return parseParams(ret, parserDelegate);
+        return parseParams(ret, block);
     }
 
     private static boolean isGroupingNeeded(List<Object> params) {
-        // No operators or all of the same precedence
-        return params.stream().filter(p -> (p instanceof Operator)).map(p -> ((Operator) p).getPrecedence()).distinct()
-                .count() > 1;
+        Integer lastPrecedence = null;
+        for (Object param : params) {
+            if (param instanceof Operator) {
+                Operator op = (Operator) param;
+                if (lastPrecedence == null) {
+                    lastPrecedence = op.getPrecedence();
+                } else if (!lastPrecedence.equals(op.getPrecedence())) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
-    private static void replaceOperatorsAndCompositeParams(List<Object> params, ParserDelegate parserDelegate) {
+    private static <B extends ErrorInitializer & WithOrigin> void replaceOperatorsAndCompositeParams(List<Object> params,
+            B block) {
         for (ListIterator<Object> iterator = params.listIterator(); iterator.hasNext();) {
             Object param = iterator.next();
             if (param instanceof String) {
@@ -575,8 +574,12 @@ public class IfSectionHelper implements SectionHelper {
                 Operator operator = Operator.from(stringParam);
                 if (operator != null) {
                     if (operator.isBinary() && !iterator.hasNext()) {
-                        throw parserDelegate.createParserError(
-                                "binary operator [" + operator + "] set but the second operand not present for {#if} section");
+                        throw block.error(
+                                "binary operator [{operator}] set but the second operand not present for \\{#if\\} section")
+                                .argument("operator", operator)
+                                .code(Code.BINARY_OPERATOR_MISSING_SECOND_OPERAND)
+                                .origin(block.getOrigin())
+                                .build();
                     }
                     iterator.set(operator);
                 } else {
@@ -585,13 +588,13 @@ public class IfSectionHelper implements SectionHelper {
                         iterator.set(Operator.NOT);
                         stringParam = stringParam.substring(1);
                         if (stringParam.charAt(0) == Parser.START_COMPOSITE_PARAM) {
-                            iterator.add(processCompositeParam(stringParam, parserDelegate));
+                            iterator.add(processCompositeParam(stringParam, block));
                         } else {
                             iterator.add(stringParam);
                         }
                     } else {
                         if (stringParam.charAt(0) == Parser.START_COMPOSITE_PARAM) {
-                            iterator.set(processCompositeParam(stringParam, parserDelegate));
+                            iterator.set(processCompositeParam(stringParam, block));
                         }
                     }
                 }
@@ -612,15 +615,16 @@ public class IfSectionHelper implements SectionHelper {
         return highestPrecedence;
     }
 
-    static List<Object> processCompositeParam(String stringParam, ParserDelegate parserDelegate) {
+    static <B extends ErrorInitializer & WithOrigin> List<Object> processCompositeParam(String stringParam, B block) {
         // Composite params
         if (!stringParam.endsWith("" + Parser.END_COMPOSITE_PARAM)) {
             throw new TemplateException("Invalid composite parameter found: " + stringParam);
         }
         List<Object> split = new ArrayList<>();
-        Parser.splitSectionParams(stringParam.substring(1, stringParam.length() - 1), TemplateException::new)
+        Parser.splitSectionParams(stringParam.substring(1, stringParam.length() - 1),
+                block)
                 .forEachRemaining(split::add);
-        return parseParams(split, parserDelegate);
+        return parseParams(split, block);
     }
 
     @SuppressWarnings("unchecked")
@@ -666,6 +670,22 @@ public class IfSectionHelper implements SectionHelper {
             throw new TemplateException("Unsupported param type: " + param);
         }
         return condition;
+    }
+
+    enum Code implements ErrorCode {
+
+        /**
+         * <code>{#if foo >}{/}</code>
+         */
+        BINARY_OPERATOR_MISSING_SECOND_OPERAND,
+
+        ;
+
+        @Override
+        public String getName() {
+            return "IF_" + name();
+        }
+
     }
 
 }

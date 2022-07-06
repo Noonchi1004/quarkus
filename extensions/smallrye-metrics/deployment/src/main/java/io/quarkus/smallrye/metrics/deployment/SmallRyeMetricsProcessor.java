@@ -107,7 +107,7 @@ public class SmallRyeMetricsProcessor {
         String path;
 
         /**
-         * Whether or not metrics published by Quarkus extensions should be enabled.
+         * Whether metrics published by Quarkus extensions should be enabled.
          */
         @ConfigItem(name = "extensions.enabled", defaultValue = "true")
         public boolean extensionsEnabled;
@@ -122,7 +122,7 @@ public class SmallRyeMetricsProcessor {
         public boolean micrometerCompatibility;
 
         /**
-         * Whether or not detailed JAX-RS metrics should be enabled.
+         * Whether detailed JAX-RS metrics should be enabled.
          * <p>
          * See <a href=
          * "https://github.com/eclipse/microprofile-metrics/blob/2.3.x/spec/src/main/asciidoc/required-metrics.adoc#optional-rest">MicroProfile
@@ -168,6 +168,7 @@ public class SmallRyeMetricsProcessor {
                 .build());
         routes.produce(frameworkRoot.routeBuilder()
                 .route(metrics.path)
+                .routeConfigKey("quarkus.smallrye-metrics.path")
                 .handler(recorder.handler(frameworkRoot.resolvePath(metrics.path)))
                 .displayOnNotFoundPage("Metrics")
                 .blockingRoute()
@@ -213,7 +214,7 @@ public class SmallRyeMetricsProcessor {
                 ClassInfo clazz = ctx.getTarget().asClass();
                 if (!isJaxRsEndpoint(clazz) && !isJaxRsProvider(clazz)) {
                     while (clazz != null && clazz.superName() != null) {
-                        Map<DotName, List<AnnotationInstance>> annotations = clazz.annotations();
+                        Map<DotName, List<AnnotationInstance>> annotations = clazz.annotationsMap();
                         if (annotations.containsKey(GAUGE)
                                 || annotations.containsKey(SmallRyeMetricsDotNames.CONCURRENT_GAUGE)
                                 || annotations.containsKey(SmallRyeMetricsDotNames.COUNTED)
@@ -253,7 +254,7 @@ public class SmallRyeMetricsProcessor {
                                 io.smallrye.metrics.interceptors.GaugeRegistrationInterceptor.class.getPackage().getName())) {
                     return;
                 }
-                if (clazz.annotations().containsKey(GAUGE)) {
+                if (clazz.annotationsMap().containsKey(GAUGE)) {
                     BuiltinScope beanScope = BuiltinScope.from(clazz);
                     if (!isJaxRsEndpoint(clazz) && beanScope != null &&
                             !beanScope.equals(BuiltinScope.APPLICATION) &&
@@ -614,12 +615,12 @@ public class SmallRyeMetricsProcessor {
     }
 
     private boolean isJaxRsEndpoint(ClassInfo clazz) {
-        return clazz.annotations().containsKey(SmallRyeMetricsDotNames.JAXRS_PATH) ||
-                clazz.annotations().containsKey(SmallRyeMetricsDotNames.REST_CONTROLLER);
+        return clazz.annotationsMap().containsKey(SmallRyeMetricsDotNames.JAXRS_PATH) ||
+                clazz.annotationsMap().containsKey(SmallRyeMetricsDotNames.REST_CONTROLLER);
     }
 
     private boolean isJaxRsProvider(ClassInfo clazz) {
-        return clazz.annotations().containsKey(SmallRyeMetricsDotNames.JAXRS_PROVIDER);
+        return clazz.annotationsMap().containsKey(SmallRyeMetricsDotNames.JAXRS_PROVIDER);
     }
 
 }

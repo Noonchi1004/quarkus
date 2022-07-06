@@ -54,7 +54,6 @@ import io.quarkus.arc.deployment.UnremovableBeanBuildItem;
 import io.quarkus.arc.processor.BeanInfo;
 import io.quarkus.arc.processor.BuiltinScope;
 import io.quarkus.arc.processor.DotNames;
-import io.quarkus.bootstrap.classloading.ClassPathElement;
 import io.quarkus.bootstrap.classloading.QuarkusClassLoader;
 import io.quarkus.deployment.Capabilities;
 import io.quarkus.deployment.Capability;
@@ -67,13 +66,16 @@ import io.quarkus.deployment.builditem.CombinedIndexBuildItem;
 import io.quarkus.deployment.builditem.ConfigClassBuildItem;
 import io.quarkus.deployment.builditem.FeatureBuildItem;
 import io.quarkus.deployment.builditem.HotDeploymentWatchedFileBuildItem;
+import io.quarkus.deployment.builditem.NativeImageFeatureBuildItem;
 import io.quarkus.deployment.builditem.ShutdownContextBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.NativeImageResourceBundleBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveFieldBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveMethodBuildItem;
 import io.quarkus.deployment.logging.LogCleanupFilterBuildItem;
+import io.quarkus.deployment.pkg.steps.NativeOrNativeSourcesBuild;
 import io.quarkus.deployment.recording.RecorderContext;
+import io.quarkus.hibernate.validator.runtime.DisableLoggingFeature;
 import io.quarkus.hibernate.validator.runtime.HibernateValidatorBuildTimeConfig;
 import io.quarkus.hibernate.validator.runtime.HibernateValidatorRecorder;
 import io.quarkus.hibernate.validator.runtime.ValidatorProvider;
@@ -127,6 +129,11 @@ class HibernateValidatorProcessor {
         return new LogCleanupFilterBuildItem("org.hibernate.validator.internal.util.Version", "HV000001:");
     }
 
+    @BuildStep(onlyIf = NativeOrNativeSourcesBuild.class)
+    NativeImageFeatureBuildItem nativeImageFeature() {
+        return new NativeImageFeatureBuildItem(DisableLoggingFeature.class);
+    }
+
     @BuildStep
     @Record(ExecutionTime.STATIC_INIT)
     void registerAdditionalBeans(HibernateValidatorRecorder hibernateValidatorRecorder,
@@ -142,14 +149,15 @@ class HibernateValidatorProcessor {
         // The CDI interceptor which will validate the methods annotated with @MethodValidated
         additionalBeans.produce(new AdditionalBeanBuildItem(MethodValidationInterceptor.class));
 
+        additionalBeans.produce(new AdditionalBeanBuildItem(
+                "io.quarkus.hibernate.validator.runtime.locale.LocaleResolversWrapper"));
+
         if (capabilities.isPresent(Capability.RESTEASY)) {
             // The CDI interceptor which will validate the methods annotated with @JaxrsEndPointValidated
             additionalBeans.produce(new AdditionalBeanBuildItem(
                     "io.quarkus.hibernate.validator.runtime.jaxrs.JaxrsEndPointValidationInterceptor"));
             additionalBeans.produce(new AdditionalBeanBuildItem(
-                    "io.quarkus.hibernate.validator.runtime.locale.LocaleResolversWrapper"));
-            additionalBeans.produce(new AdditionalBeanBuildItem(
-                    "io.quarkus.hibernate.validator.runtime.locale.ResteasyContextLocaleResolver"));
+                    "io.quarkus.hibernate.validator.runtime.locale.ResteasyClassicLocaleResolver"));
             syntheticBeanBuildItems.produce(SyntheticBeanBuildItem.configure(ResteasyConfigSupport.class)
                     .scope(Singleton.class)
                     .unremovable()
@@ -161,15 +169,7 @@ class HibernateValidatorProcessor {
             additionalBeans.produce(new AdditionalBeanBuildItem(
                     "io.quarkus.hibernate.validator.runtime.jaxrs.ResteasyReactiveEndPointValidationInterceptor"));
             additionalBeans.produce(new AdditionalBeanBuildItem(
-                    "io.quarkus.hibernate.validator.runtime.locale.LocaleResolversWrapper"));
-            additionalBeans.produce(new AdditionalBeanBuildItem(
-                    "io.quarkus.hibernate.validator.runtime.locale.VertxLocaleResolver"));
-        }
-        if (capabilities.isPresent(Capability.SMALLRYE_GRAPHQL)) {
-            additionalBeans.produce(new AdditionalBeanBuildItem(
-                    "io.quarkus.hibernate.validator.runtime.locale.LocaleResolversWrapper"));
-            additionalBeans.produce(new AdditionalBeanBuildItem(
-                    "io.quarkus.hibernate.validator.runtime.locale.VertxLocaleResolver"));
+                    "io.quarkus.hibernate.validator.runtime.locale.ResteasyReactiveLocaleResolver"));
         }
 
         // A constraint validator with an injection point but no scope is added as @Dependent
@@ -226,8 +226,8 @@ class HibernateValidatorProcessor {
         for (AnnotationInstance constraint : indexView.getAnnotations(DotName.createSimple(Constraint.class.getName()))) {
             constraints.add(constraint.target().asClass().name());
 
-            if (constraint.target().asClass().annotations().containsKey(REPEATABLE)) {
-                for (AnnotationInstance repeatableConstraint : constraint.target().asClass().annotations()
+            if (constraint.target().asClass().annotationsMap().containsKey(REPEATABLE)) {
+                for (AnnotationInstance repeatableConstraint : constraint.target().asClass().annotationsMap()
                         .get(REPEATABLE)) {
                     constraints.add(repeatableConstraint.value().asClass().name());
                 }
@@ -286,7 +286,7 @@ class HibernateValidatorProcessor {
                     // a getter does not have parameters so it's a pure method: no need for reflection in this case
                     contributeClassMarkedForCascadingValidation(classNamesToBeValidated, indexView, consideredAnnotation,
                             // FIXME this won't work in the case of synthetic parameters
-                            annotation.target().asMethodParameter().method().parameters()
+                            annotation.target().asMethodParameter().method().parameterTypes()
                                     .get(annotation.target().asMethodParameter().position()));
                     contributeMethodsWithInheritedValidation(methodsWithInheritedValidation, indexView,
                             annotation.target().asMethodParameter().method());
@@ -364,11 +364,8 @@ class HibernateValidatorProcessor {
                 AbstractMessageInterpolator.CONTRIBUTOR_VALIDATION_MESSAGES };
 
         for (String potentialHibernateValidatorResourceBundle : potentialHibernateValidatorResourceBundles) {
-            for (ClassPathElement cpe : QuarkusClassLoader.getElements(potentialHibernateValidatorResourceBundle, false)) {
-                if (cpe.isRuntime()) {
-                    resourceBundles.produce(new NativeImageResourceBundleBuildItem(potentialHibernateValidatorResourceBundle));
-                    break;
-                }
+            if (QuarkusClassLoader.isResourcePresentAtRuntime(potentialHibernateValidatorResourceBundle)) {
+                resourceBundles.produce(new NativeImageResourceBundleBuildItem(potentialHibernateValidatorResourceBundle));
             }
         }
     }

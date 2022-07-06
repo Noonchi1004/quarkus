@@ -10,6 +10,7 @@ final class DotNames {
 
     static final DotName EMITTER = DotName.createSimple(org.eclipse.microprofile.reactive.messaging.Emitter.class.getName());
     static final DotName MUTINY_EMITTER = DotName.createSimple(io.smallrye.reactive.messaging.MutinyEmitter.class.getName());
+    static final DotName KAFKA_EMITTER = DotName.createSimple(io.smallrye.reactive.messaging.kafka.transactions.KafkaTransactions.class.getName());
 
     static final DotName MESSAGE = DotName.createSimple(org.eclipse.microprofile.reactive.messaging.Message.class.getName());
     static final DotName KAFKA_RECORD = DotName.createSimple(io.smallrye.reactive.messaging.kafka.KafkaRecord.class.getName());
@@ -30,6 +31,8 @@ final class DotNames {
 
     static final DotName AVRO_GENERATED = DotName.createSimple("org.apache.avro.specific.AvroGenerated");
     static final DotName AVRO_GENERIC_RECORD = DotName.createSimple("org.apache.avro.generic.GenericRecord");
+    static final DotName KAFKA_SERIALIZER = DotName.createSimple(org.apache.kafka.common.serialization.Serializer.class.getName());
+    static final DotName KAFKA_DESERIALIZER = DotName.createSimple(org.apache.kafka.common.serialization.Deserializer.class.getName());
     static final DotName OBJECT_MAPPER_DESERIALIZER = DotName.createSimple(io.quarkus.kafka.client.serialization.ObjectMapperDeserializer.class.getName());
     static final DotName OBJECT_MAPPER_SERIALIZER = DotName.createSimple(io.quarkus.kafka.client.serialization.ObjectMapperSerializer.class.getName());
     static final DotName JSONB_DESERIALIZER = DotName.createSimple(io.quarkus.kafka.client.serialization.JsonbDeserializer.class.getName());

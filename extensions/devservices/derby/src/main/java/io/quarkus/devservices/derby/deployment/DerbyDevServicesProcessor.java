@@ -1,5 +1,7 @@
 package io.quarkus.devservices.derby.deployment;
 
+import static io.quarkus.datasource.deployment.spi.DatabaseDefaultSetupConfig.DEFAULT_DATABASE_NAME;
+
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -7,12 +9,12 @@ import java.net.InetAddress;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
-import java.util.OptionalInt;
 
 import org.apache.derby.drda.NetworkServerControl;
 import org.jboss.logging.Logger;
 
 import io.quarkus.datasource.common.runtime.DatabaseKind;
+import io.quarkus.datasource.deployment.spi.DevServicesDatasourceContainerConfig;
 import io.quarkus.datasource.deployment.spi.DevServicesDatasourceProvider;
 import io.quarkus.datasource.deployment.spi.DevServicesDatasourceProviderBuildItem;
 import io.quarkus.deployment.annotations.BuildStep;
@@ -30,12 +32,15 @@ public class DerbyDevServicesProcessor {
         return new DevServicesDatasourceProviderBuildItem(DatabaseKind.DERBY, new DevServicesDatasourceProvider() {
             @Override
             public RunningDevServicesDatasource startDatabase(Optional<String> username, Optional<String> password,
-                    Optional<String> datasourceName, Optional<String> imageName,
-                    Map<String, String> containerProperties, Map<String, String> additionalJdbcUrlProperties,
-                    OptionalInt fixedExposedPort, LaunchMode launchMode, Optional<Duration> startupTimeout) {
+                    Optional<String> datasourceName, DevServicesDatasourceContainerConfig containerConfig,
+                    LaunchMode launchMode, Optional<Duration> startupTimeout) {
                 try {
-                    int port = fixedExposedPort.isPresent() ? fixedExposedPort.getAsInt()
+                    int port = containerConfig.getFixedExposedPort().isPresent()
+                            ? containerConfig.getFixedExposedPort().getAsInt()
                             : 1527 + (launchMode == LaunchMode.TEST ? 0 : 1);
+
+                    String effectiveDbName = containerConfig.getDbName().orElse(datasourceName.orElse(DEFAULT_DATABASE_NAME));
+
                     NetworkServerControl server = new NetworkServerControl(InetAddress.getByName("localhost"), port);
                     server.start(new PrintWriter(System.out));
                     for (int i = 1; i <= NUMBER_OF_PINGS; i++) {
@@ -58,15 +63,16 @@ public class DerbyDevServicesProcessor {
                     LOG.info("Dev Services for Derby started.");
 
                     StringBuilder additionalArgs = new StringBuilder();
-                    for (Map.Entry<String, String> i : additionalJdbcUrlProperties.entrySet()) {
+                    for (Map.Entry<String, String> i : containerConfig.getAdditionalJdbcUrlProperties().entrySet()) {
                         additionalArgs.append(";");
                         additionalArgs.append(i.getKey());
                         additionalArgs.append("=");
                         additionalArgs.append(i.getValue());
                     }
                     return new RunningDevServicesDatasource(null,
-                            "jdbc:derby://localhost:" + port + "/memory:" + datasourceName.orElse("quarkus") + ";create=true"
+                            "jdbc:derby://localhost:" + port + "/memory:" + effectiveDbName + ";create=true"
                                     + additionalArgs.toString(),
+                            null,
                             null,
                             null,
                             new Closeable() {

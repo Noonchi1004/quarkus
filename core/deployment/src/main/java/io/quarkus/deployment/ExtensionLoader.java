@@ -24,6 +24,7 @@ import java.lang.reflect.Parameter;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashMap;
@@ -39,6 +40,7 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 import javax.inject.Inject;
 
@@ -57,6 +59,7 @@ import io.quarkus.builder.ConsumeFlags;
 import io.quarkus.builder.ProduceFlag;
 import io.quarkus.builder.ProduceFlags;
 import io.quarkus.builder.item.BuildItem;
+import io.quarkus.builder.item.EmptyBuildItem;
 import io.quarkus.builder.item.MultiBuildItem;
 import io.quarkus.builder.item.SimpleBuildItem;
 import io.quarkus.deployment.annotations.BuildProducer;
@@ -96,6 +99,7 @@ import io.quarkus.runtime.annotations.ConfigRoot;
 import io.quarkus.runtime.annotations.Recorder;
 import io.quarkus.runtime.configuration.ConfigUtils;
 import io.quarkus.runtime.configuration.QuarkusConfigFactory;
+import io.quarkus.runtime.util.HashUtil;
 import io.smallrye.config.ConfigMappings.ConfigClassWithPrefix;
 import io.smallrye.config.KeyMap;
 import io.smallrye.config.KeyMapBackedConfigSource;
@@ -126,7 +130,6 @@ public final class ExtensionLoader {
      * @param classLoader the class loader
      * @param buildSystemProps the build system properties to use
      * @param launchMode launch mode
-     * @param configCustomizer configuration customizer
      * @return a consumer which adds the steps to the given chain builder
      * @throws IOException if the class loader could not load a resource
      * @throws ClassNotFoundException if a build step class is not found
@@ -313,6 +316,12 @@ public final class ExtensionLoader {
                             .asSubclass(SimpleBuildItem.class);
                     stepConfig = stepConfig.andThen(bsb -> bsb.consumes(buildItemClass));
                     ctorParamFns.add(bc -> bc.consume(buildItemClass));
+                } else if (isAnEmptyBuildItemConsumer(parameterType)) {
+                    throw reportError(parameter,
+                            "Cannot consume an empty build item, use @Consume(class) on the constructor instead");
+                } else if (isAnEmptyBuildItemProducer(parameterType)) {
+                    throw reportError(parameter,
+                            "Cannot produce an empty build item, use @Produce(class) on the constructor instead");
                 } else if (isListOf(parameterType, MultiBuildItem.class)) {
                     final Class<? extends MultiBuildItem> buildItemClass = rawTypeOfParameter(parameterType, 0)
                             .asSubclass(MultiBuildItem.class);
@@ -423,6 +432,10 @@ public final class ExtensionLoader {
                 stepConfig = stepConfig.andThen(bsb -> bsb.consumes(buildItemClass));
                 stepInstanceSetup = stepInstanceSetup
                         .andThen((bc, o) -> ReflectUtil.setFieldVal(field, o, bc.consume(buildItemClass)));
+            } else if (isAnEmptyBuildItemConsumer(fieldType)) {
+                throw reportError(field, "Cannot consume an empty build item, use @Consume(class) on the field instead");
+            } else if (isAnEmptyBuildItemProducer(fieldType)) {
+                throw reportError(field, "Cannot produce an empty build item, use @Produce(class) on the field instead");
             } else if (isListOf(fieldType, MultiBuildItem.class)) {
                 final Class<? extends MultiBuildItem> buildItemClass = rawTypeOfParameter(fieldType, 0)
                         .asSubclass(MultiBuildItem.class);
@@ -516,6 +529,8 @@ public final class ExtensionLoader {
 
         // now iterate the methods
         final List<Method> methods = getMethods(clazz);
+        final Map<String, List<Method>> nameToMethods = methods.stream().collect(Collectors.groupingBy(m -> m.getName()));
+
         for (Method method : methods) {
             final BuildStep buildStep = method.getAnnotation(BuildStep.class);
             if (buildStep == null) {
@@ -588,6 +603,12 @@ public final class ExtensionLoader {
                                 .asSubclass(SimpleBuildItem.class);
                         methodStepConfig = methodStepConfig.andThen(bsb -> bsb.consumes(buildItemClass));
                         methodParamFns.add((bc, bri) -> bc.consume(buildItemClass));
+                    } else if (isAnEmptyBuildItemConsumer(parameterType)) {
+                        throw reportError(parameter,
+                                "Cannot consume an empty build item, use @Consume(class) on the build step method instead");
+                    } else if (isAnEmptyBuildItemProducer(parameterType)) {
+                        throw reportError(parameter,
+                                "Cannot produce an empty build item, use @Produce(class) on the build step method instead");
                     } else if (isListOf(parameterType, MultiBuildItem.class)) {
                         final Class<? extends MultiBuildItem> buildItemClass = rawTypeOfParameter(parameterType, 0)
                                 .asSubclass(MultiBuildItem.class);
@@ -745,6 +766,9 @@ public final class ExtensionLoader {
             final boolean overridable = method.isAnnotationPresent(Overridable.class);
             if (rawTypeIs(returnType, void.class)) {
                 resultConsumer = Functions.discardingBiConsumer();
+            } else if (rawTypeExtends(returnType, EmptyBuildItem.class) || isOptionalOf(returnType, EmptyBuildItem.class)) {
+                throw reportError(method,
+                        "Cannot produce an empty build item, use @Produce(class) on the build step method instead");
             } else if (rawTypeExtends(returnType, BuildItem.class)) {
                 final Class<? extends BuildItem> type = method.getReturnType().asSubclass(BuildItem.class);
                 if (overridable) {
@@ -860,6 +884,16 @@ public final class ExtensionLoader {
                     .andThen(buildStepBuilder -> buildStepBuilder.buildIf(finalAddStep));
             final BiConsumer<BuildContext, Object> finalStepInstanceSetup = stepInstanceSetup;
             final String name = clazz.getName() + "#" + method.getName();
+            final String stepId;
+            List<Method> methodsWithName = nameToMethods.get(method.getName());
+            if (methodsWithName.size() > 1) {
+                // Append the sha1 of the parameter types to resolve the ambiguity
+                stepId = name + "_" + HashUtil.sha1(Arrays.toString(method.getParameterTypes()));
+                loadLog.debugf("Build steps with ambiguous name detected: %s, using discriminator suffix for step id: %s", name,
+                        stepId);
+            } else {
+                stepId = name;
+            }
 
             chainConfig = chainConfig
                     .andThen(bcb -> {
@@ -946,6 +980,11 @@ public final class ExtensionLoader {
                                 }
                             }
 
+                            @Override
+                            public String getId() {
+                                return stepId;
+                            }
+
                             public String toString() {
                                 return name;
                             }
@@ -954,6 +993,18 @@ public final class ExtensionLoader {
                     });
         }
         return chainConfig;
+    }
+
+    private static boolean isAnEmptyBuildItemProducer(Type parameterType) {
+        return isBuildProducerOf(parameterType, EmptyBuildItem.class)
+                || isSupplierOf(parameterType, EmptyBuildItem.class)
+                || isSupplierOfOptionalOf(parameterType, EmptyBuildItem.class);
+    }
+
+    private static boolean isAnEmptyBuildItemConsumer(Type parameterType) {
+        return rawTypeExtends(parameterType, EmptyBuildItem.class)
+                || isOptionalOf(parameterType, EmptyBuildItem.class)
+                || isConsumerOf(parameterType, EmptyBuildItem.class);
     }
 
     private static void deprecatedProducer(final Object element) {

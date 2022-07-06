@@ -150,7 +150,7 @@ public class DecoratorGenerator extends BeanGenerator {
         // Constructor
         MethodInfo decoratorConstructor = decoratorClass.firstMethod(Methods.INIT);
         MethodCreator constructor = decoratorImplCreator.getMethodCreator(Methods.INIT, "V",
-                decoratorConstructor.parameters().toArray());
+                decoratorConstructor.parameterTypes().toArray());
         // Invoke super()
         constructor.invokeSpecialMethod(decoratorConstructor, constructor.getThis());
         // Set the delegate field
@@ -278,8 +278,7 @@ public class DecoratorGenerator extends BeanGenerator {
                 // Create annotation literal first
                 ClassInfo delegateQualifierClass = decorator.getDeployment().getQualifier(delegateQualifier.name());
                 constructor.invokeInterfaceMethod(MethodDescriptors.SET_ADD, delegateQualifiersHandle,
-                        annotationLiterals.process(constructor, classOutput, delegateQualifierClass, delegateQualifier,
-                                Types.getPackageName(creator.getClassName())));
+                        annotationLiterals.create(constructor, delegateQualifierClass, delegateQualifier));
             }
             constructor.writeInstanceField(delegateQualifiers.getFieldDescriptor(), constructor.getThis(),
                     delegateQualifiersHandle);

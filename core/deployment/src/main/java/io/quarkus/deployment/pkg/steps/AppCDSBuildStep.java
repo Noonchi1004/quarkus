@@ -102,7 +102,9 @@ public class AppCDSBuildStep {
 
     private String determineContainerImage(PackageConfig packageConfig,
             Optional<AppCDSContainerImageBuildItem> appCDSContainerImage) {
-        if (packageConfig.appcdsBuilderImage.isPresent()) {
+        if (!packageConfig.appcdsUseContainer) {
+            return null;
+        } else if (packageConfig.appcdsBuilderImage.isPresent()) {
             return packageConfig.appcdsBuilderImage.get();
         } else if (appCDSContainerImage.isPresent()) {
             return appCDSContainerImage.get().getContainerImage();
@@ -162,12 +164,13 @@ public class AppCDSBuildStep {
             }
             exitCode = processBuilder.start().waitFor();
         } catch (Exception e) {
-            log.debug("Failed to launch process used to create '" + CLASSES_LIST_FILE_NAME + "'.", e);
+            log.warn("Failed to launch process used to create '" + CLASSES_LIST_FILE_NAME + "'. using the following command:'"
+                    + command + "'", e);
             return null;
         }
 
         if (exitCode != 0) {
-            log.debugf("The process that was supposed to create AppCDS exited with error code: %d.", exitCode);
+            log.warnf("Command '%s' that was supposed to create AppCDS exited with error code: %d.", command, exitCode);
             return null;
         }
 

@@ -45,15 +45,16 @@ public abstract class NativeImageBuildContainerRunner extends NativeImageBuildRu
             // we pull the docker image in order to give users an indication of which step the process is at
             // it's not strictly necessary we do this, however if we don't the subsequent version command
             // will appear to block and no output will be shown
-            log.info("Checking image status " + nativeConfig.getEffectiveBuilderImage());
+            String effectiveBuilderImage = nativeConfig.getEffectiveBuilderImage();
+            log.info("Checking image status " + effectiveBuilderImage);
             Process pullProcess = null;
             try {
                 final ProcessBuilder pb = new ProcessBuilder(
-                        Arrays.asList(containerRuntime.getExecutableName(), "pull", nativeConfig.getEffectiveBuilderImage()));
+                        Arrays.asList(containerRuntime.getExecutableName(), "pull", effectiveBuilderImage));
                 pullProcess = ProcessUtil.launchProcess(pb, processInheritIODisabled);
                 pullProcess.waitFor();
             } catch (IOException | InterruptedException e) {
-                throw new RuntimeException("Failed to pull builder image " + nativeConfig.getEffectiveBuilderImage(), e);
+                throw new RuntimeException("Failed to pull builder image " + effectiveBuilderImage, e);
             } finally {
                 if (pullProcess != null) {
                     pullProcess.destroy();
@@ -95,9 +96,9 @@ public abstract class NativeImageBuildContainerRunner extends NativeImageBuildRu
                 try {
                     Process removeProcess = new ProcessBuilder(
                             List.of(containerRuntime.getExecutableName(), "rm", "-f", containerName))
-                                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                                    .redirectError(ProcessBuilder.Redirect.DISCARD)
-                                    .start();
+                            .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                            .redirectError(ProcessBuilder.Redirect.DISCARD)
+                            .start();
                     removeProcess.waitFor(2, TimeUnit.SECONDS);
                 } catch (IOException | InterruptedException e) {
                     log.debug("Unable to stop running container", e);

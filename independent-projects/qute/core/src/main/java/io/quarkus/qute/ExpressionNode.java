@@ -15,20 +15,20 @@ class ExpressionNode implements TemplateNode, Function<Object, CompletionStage<R
 
     final ExpressionImpl expression;
     private final Engine engine;
-    private final Origin origin;
     private final boolean traceLevel;
+    private final boolean hasEngineResultMappers;
 
-    public ExpressionNode(ExpressionImpl expression, Engine engine, Origin origin) {
+    ExpressionNode(ExpressionImpl expression, Engine engine) {
         this.expression = expression;
         this.engine = engine;
-        this.origin = origin;
         this.traceLevel = LOG.isTraceEnabled();
+        this.hasEngineResultMappers = !engine.getResultMappers().isEmpty();
     }
 
     @Override
     public CompletionStage<ResultNode> resolve(ResolutionContext context) {
         if (traceLevel) {
-            LOG.tracef("Resolve {%s} started: %s", expression.toOriginalString(), expression.getOrigin());
+            LOG.tracef("Resolve {%s} started:%s", expression.toOriginalString(), expression.getOrigin());
         }
         return context.evaluate(expression).thenCompose(this);
     }
@@ -36,7 +36,7 @@ class ExpressionNode implements TemplateNode, Function<Object, CompletionStage<R
     @Override
     public CompletionStage<ResultNode> apply(Object result) {
         if (traceLevel) {
-            LOG.tracef("Resolve {%s} completed: %s", expression.toOriginalString(), expression.getOrigin());
+            LOG.tracef("Resolve {%s} completed:%s", expression.toOriginalString(), expression.getOrigin());
         }
         if (result instanceof ResultNode) {
             return CompletedStage.of((ResultNode) result);
@@ -48,7 +48,7 @@ class ExpressionNode implements TemplateNode, Function<Object, CompletionStage<R
     }
 
     public Origin getOrigin() {
-        return origin;
+        return expression.getOrigin();
     }
 
     @Override
@@ -72,7 +72,7 @@ class ExpressionNode implements TemplateNode, Function<Object, CompletionStage<R
     }
 
     boolean hasEngineResultMappers() {
-        return !engine.getResultMappers().isEmpty();
+        return hasEngineResultMappers;
     }
 
     String mapResult(Object result) {

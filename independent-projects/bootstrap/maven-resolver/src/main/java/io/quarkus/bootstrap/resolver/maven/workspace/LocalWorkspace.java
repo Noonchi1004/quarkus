@@ -109,7 +109,7 @@ public class LocalWorkspace implements WorkspaceModelResolver, WorkspaceReader, 
         if (ArtifactCoords.TYPE_POM.equals(artifact.getExtension())) {
             final File pom = lp.getRawModel().getPomFile();
             // if the pom exists we should also check whether the main artifact can also be resolved from the workspace
-            if (pom.exists() && ("pom".equals(lp.getRawModel().getPackaging())
+            if (pom.exists() && (ArtifactCoords.TYPE_POM.equals(lp.getRawModel().getPackaging())
                     || mvnCtx != null && mvnCtx.isPreferPomsFromWorkspace()
                     || Files.exists(lp.getOutputDir())
                     || emptyJarOutput(lp, artifact) != null)) {
@@ -243,8 +243,8 @@ public class LocalWorkspace implements WorkspaceModelResolver, WorkspaceReader, 
     }
 
     @Override
-    public WorkspaceModule getProjectModule(String groupId, String artifactId) {
-        final LocalProject project = getProject(groupId, artifactId);
+    public WorkspaceModule getProjectModule(ArtifactKey key) {
+        final LocalProject project = getProject(key);
         return project == null ? null : project.toWorkspaceModule();
     }
 }

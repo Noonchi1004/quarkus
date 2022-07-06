@@ -10,6 +10,7 @@ import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.StringTokenizer;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
 import javax.crypto.SecretKey;
@@ -40,6 +41,11 @@ import io.quarkus.security.runtime.QuarkusSecurityIdentity.Builder;
 import io.smallrye.jwt.algorithm.ContentEncryptionAlgorithm;
 import io.smallrye.jwt.algorithm.KeyEncryptionAlgorithm;
 import io.smallrye.mutiny.Uni;
+import io.smallrye.mutiny.subscription.UniEmitter;
+import io.vertx.core.Handler;
+import io.vertx.core.MultiMap;
+import io.vertx.core.http.HttpHeaders;
+import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.impl.ServerCookie;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
@@ -84,7 +90,7 @@ public final class OidcUtils {
         // part 2: token content
         String encodedContent = tokens.nextToken();
 
-        // lets check only 1 more signature part is available
+        // let's check only 1 more signature part is available
         if (tokens.countTokens() != 1) {
             return null;
         }
@@ -109,7 +115,7 @@ public final class OidcUtils {
         if (rolesConfig.getRoleClaimPath().isPresent()) {
             List<String> roles = new LinkedList<>();
             for (String roleClaimPath : rolesConfig.getRoleClaimPath().get()) {
-                roles.addAll(findClaimWithRoles(rolesConfig, roleClaimPath, json));
+                roles.addAll(findClaimWithRoles(rolesConfig, roleClaimPath.trim(), json));
             }
             return roles;
         }
@@ -428,5 +434,29 @@ public final class OidcUtils {
         jwe.setKey(key);
         jwe.setCompactSerialization(jweString);
         return jwe.getPlaintextString();
+    }
+
+    public static boolean isFormUrlEncodedRequest(RoutingContext context) {
+        String contentType = context.request().getHeader("Content-Type");
+        return context.request().method() == HttpMethod.POST
+                && contentType != null
+                && (contentType.equals(HttpHeaders.APPLICATION_X_WWW_FORM_URLENCODED.toString())
+                        || contentType.startsWith(HttpHeaders.APPLICATION_X_WWW_FORM_URLENCODED.toString() + ";"));
+    }
+
+    public static Uni<MultiMap> getFormUrlEncodedData(RoutingContext context) {
+        context.request().setExpectMultipart(true);
+        return Uni.createFrom().emitter(new Consumer<UniEmitter<? super MultiMap>>() {
+            @Override
+            public void accept(UniEmitter<? super MultiMap> t) {
+                context.request().endHandler(new Handler<Void>() {
+                    @Override
+                    public void handle(Void event) {
+                        t.complete(context.request().formAttributes());
+                    }
+                });
+                context.request().resume();
+            }
+        });
     }
 }

@@ -339,6 +339,12 @@ public class JunitTestRunner {
                                                         TestExecutionResult.failed(failure), List.of(), false, runId, 0,
                                                         false));
                                         results.put(UniqueId.parse(currentNonDynamicTest.get().getUniqueId()), result);
+                                    } else if (testExecutionResult.getStatus() == TestExecutionResult.Status.FAILED) {
+                                        Throwable throwable = testExecutionResult.getThrowable().get();
+                                        trimStackTrace(testClass, throwable);
+                                        for (var i : throwable.getSuppressed()) {
+                                            trimStackTrace(testClass, i);
+                                        }
                                     }
                                 } else if (testExecutionResult.getStatus() == TestExecutionResult.Status.FAILED) {
                                     //if a parent fails we fail the children
@@ -717,7 +723,7 @@ public class JunitTestRunner {
         Set<DotName> processed = new HashSet<>();
         processed.addAll(ret);
         for (ClassInfo clazz : index.getKnownClasses()) {
-            for (DotName annotation : clazz.annotations().keySet()) {
+            for (DotName annotation : clazz.annotationsMap().keySet()) {
                 if (processed.contains(annotation)) {
                     continue;
                 }

@@ -123,8 +123,9 @@ public class QuarkusMainIntegrationTestExtension implements BeforeEachCallback, 
                         testProfileAndProperties.testProfile != null ? testProfileAndProperties.testProfile.getClass().getName()
                                 : null);
                 Map<String, String> additionalProperties = new HashMap<>(testProfileAndProperties.properties);
-                additionalProperties.putAll(QuarkusMainIntegrationTestExtension.devServicesProps);
-                Map<String, String> resourceManagerProps = testResourceManager.start();
+                Map<String, String> resourceManagerProps = new HashMap<>(testResourceManager.start());
+                //also make the dev services props accessible from the test
+                resourceManagerProps.putAll(QuarkusMainIntegrationTestExtension.devServicesProps);
                 for (Map.Entry<String, String> i : resourceManagerProps.entrySet()) {
                     old.put(i.getKey(), System.getProperty(i.getKey()));
                     if (i.getValue() == null) {
@@ -134,6 +135,8 @@ public class QuarkusMainIntegrationTestExtension implements BeforeEachCallback, 
                     }
                 }
                 additionalProperties.putAll(resourceManagerProps);
+
+                testResourceManager.inject(context.getRequiredTestInstance());
 
                 ArtifactLauncher<?> launcher = null;
                 ServiceLoader<ArtifactLauncherProvider> loader = ServiceLoader.load(ArtifactLauncherProvider.class);

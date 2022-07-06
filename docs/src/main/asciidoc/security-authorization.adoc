@@ -17,6 +17,10 @@ been blocked using `quarkus.http.auth.` configuration. If you are using JAX-RS y
 requirements instead of HTTP path level matching, as these properties can be overridden by annotations on an individual
 endpoint.
 
+Authorization is based on user roles that are provided by the security provider.
+To customize these roles, a `SecurityIdentityAugmentor` can be created, see
+xref:security-customization.adoc#security-identity-customization[Security Identity Customization].
+
 == Authorization using Configuration
 
 The default implementation allows you to define permissions using config in `application.properties`. An example
@@ -105,7 +109,7 @@ quarkus.http.auth.permission.public.policy=permit
 
 === Matching multiple paths: most specific method wins
 
-If a path is registered with multiple permission sets then any permission sets that specify a HTTP method will take
+If a path is registered with multiple permission sets then any permission sets that specify an HTTP method will take
 precedence and permissions sets without a method will not be considered (assuming of course the method matches). In this
 instance, the permission sets without methods will only come into effect if the request method does not match any of the
 sets with method permissions.
@@ -176,6 +180,35 @@ quarkus.http.auth.permission.permit1.methods=GET,HEAD
 ----
 
 and enabled at runtime with a system property or environment variable, for example: `-Dquarkus.http.auth.permission.permit1.enabled=true`.
+
+== Permission paths and http root path
+
+The `quarkus.http.root-path` configuration property is used to change the xref:http-reference.adoc#context-path[http endpoint context path].
+
+By default, `quarkus.http.root-path` is prepended automatically to configured permission paths then do not use a forward slash, for example:
+
+[source,properties]
+----
+quarkus.http.auth.permission.permit1.paths=public/*,css/*,js/*,robots.txt
+----
+
+This configuration is equivalent to the following: 
+
+[source,properties]
+----
+quarkus.http.auth.permission.permit1.paths=${quarkus.http.root-path}/public/*,${quarkus.http.root-path}/css/*,${quarkus.http.root-path}/js/*,${quarkus.http.root-path}/robots.txt
+----
+
+A leading slash will change how the configured permission path is interpreted. The configured URL will be used as-is, and paths will not be adjusted if the value of `quarkus.http.root-path` is changed. For example: 
+
+[source,properties]
+----
+quarkus.http.auth.permission.permit1.paths=/public/*,css/*,js/*,robots.txt
+----
+
+This configuration will only impact resources served from the fixed/static URL `/public`, which may not match your application resources if `quarkus.http.root-path` has been set to something other than `/`.
+
+See link:https://quarkus.io/blog/path-resolution-in-quarkus/[Path Resolution in Quarkus] for more information.
 
 [#standard-security-annotations]
 == Authorization using Annotations

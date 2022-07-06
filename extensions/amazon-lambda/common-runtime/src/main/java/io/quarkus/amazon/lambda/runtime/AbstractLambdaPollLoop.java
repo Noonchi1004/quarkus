@@ -35,6 +35,10 @@ public abstract class AbstractLambdaPollLoop {
         this.launchMode = launchMode;
     }
 
+    protected boolean shouldLog(Exception e) {
+        return true;
+    }
+
     protected abstract boolean isStream();
 
     protected HttpURLConnection requestConnection = null;
@@ -131,7 +135,9 @@ public abstract class AbstractLambdaPollLoop {
                                 if (abortGracefully(e)) {
                                     return;
                                 }
-                                log.error("Failed to run lambda (" + launchMode + ")", e);
+                                if (shouldLog(e)) {
+                                    log.error("Failed to run lambda (" + launchMode + ")", e);
+                                }
 
                                 postError(AmazonLambdaApi.invocationError(baseUrl, requestId),
                                         new FunctionError(e.getClass().getName(), e.getMessage()));
@@ -166,7 +172,7 @@ public abstract class AbstractLambdaPollLoop {
                     } catch (Exception ex) {
                         log.error("Failed to report init error (" + launchMode + ")", ex);
                     } finally {
-                        // our main loop is done, time to shutdown
+                        // our main loop is done, time to shut down
                         Application app = Application.currentApplication();
                         if (app != null) {
                             log.error("Shutting down Quarkus application because of error (" + launchMode + ")");
@@ -268,7 +274,7 @@ public abstract class AbstractLambdaPollLoop {
     }
 
     boolean abortGracefully(Exception ex) {
-        // if we are running in test mode, or native mode outside of the lambda container, then don't output stack trace for socket errors
+        // if we are running in test mode, or native mode outside the lambda container, then don't output stack trace for socket errors
 
         boolean lambdaEnv = System.getenv("AWS_LAMBDA_RUNTIME_API") != null;
         boolean testOrDevEnv = LaunchMode.current() == LaunchMode.TEST || LaunchMode.current() == LaunchMode.DEVELOPMENT;

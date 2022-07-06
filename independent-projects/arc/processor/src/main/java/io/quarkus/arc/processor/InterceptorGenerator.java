@@ -136,8 +136,7 @@ public class InterceptorGenerator extends BeanGenerator {
             // Create annotation literal first
             ClassInfo bindingClass = interceptor.getDeployment().getInterceptorBinding(bindingAnnotation.name());
             constructor.invokeInterfaceMethod(MethodDescriptors.SET_ADD, bindingsHandle,
-                    annotationLiterals.process(constructor, classOutput, bindingClass, bindingAnnotation,
-                            Types.getPackageName(creator.getClassName())));
+                    annotationLiterals.create(constructor, bindingClass, bindingAnnotation));
         }
         constructor.writeInstanceField(bindings, constructor.getThis(), bindingsHandle);
         constructor.returnValue(null);
@@ -229,7 +228,7 @@ public class InterceptorGenerator extends BeanGenerator {
             ResultHandle ret;
             // Check if interceptor method uses InvocationContext or ArcInvocationContext
             Class<?> invocationContextClass;
-            if (interceptorMethod.parameters().get(0).name().equals(DotNames.INVOCATION_CONTEXT)) {
+            if (interceptorMethod.parameterType(0).name().equals(DotNames.INVOCATION_CONTEXT)) {
                 invocationContextClass = InvocationContext.class;
             } else {
                 invocationContextClass = ArcInvocationContext.class;

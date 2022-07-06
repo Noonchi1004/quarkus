@@ -24,6 +24,7 @@ But first, read this page (including the small print at the end).
       * [`OutOfMemoryError` while importing](#-outofmemoryerror--while-importing)
       * [`package sun.misc does not exist` while building](#-package-sunmisc-does-not-exist--while-building)
       * [Formatting](#formatting)
+  + [Gitpod](#gitpod)
 * [Build](#build)
   + [Workflow tips](#workflow-tips)
     - [Building all modules of an extension](#building-all-modules-of-an-extension)
@@ -82,7 +83,7 @@ If you are interested in having more details, refer to the [Build section](#buil
 
 ### Using snapshots
 
-Snapshots are published daily so you will have to wait for a snapshot containing the commits you are interested in.
+Snapshots are published daily, so you will have to wait for a snapshot containing the commits you are interested in.
 
 Then just add https://s01.oss.sonatype.org/content/repositories/snapshots as a Maven repository **and** a plugin repository in your settings xml:
 
@@ -138,6 +139,8 @@ export MAVEN_OPTS="-Xmx4g"
 ```
 
 Wait for a bit and you're done.
+
+**Note** For Apple Silicon computer, Rosetta must be installed. It can be done using `softwareupdate --install-rosetta`
 
 ### Updating the version
 
@@ -208,16 +211,16 @@ If you have not done so on this machine, you need to:
         * `xcode-select --install` 
 * Set `GRAALVM_HOME` to your GraalVM Home directory e.g. `/opt/graalvm` on Linux or `$location/JDK/GraalVM/Contents/Home` on macOS
 
-Docker is not strictly necessary: it is used to run the MariaDB and PostgreSQL tests which are not enabled by default. However it is a recommended install if you plan to work on Quarkus JPA support:
+Docker is not strictly necessary: it is used to run the MariaDB and PostgreSQL tests which are not enabled by default. However, it is a recommended install if you plan to work on Quarkus JPA support:
 
-* Check [the installation guide](https://docs.docker.com/install/), and [the MacOS installation guide](https://docs.docker.com/docker-for-mac/install/)
+* Check [the installation guide](https://docs.docker.com/install/), and [the macOS installation guide](https://docs.docker.com/docker-for-mac/install/)
 * If you just install docker, be sure that your current user can run a container (no root required). 
 On Linux, check [the post-installation guide](https://docs.docker.com/install/linux/linux-postinstall/)
 
 ### IDE Config and Code Style
 
 Quarkus has a strictly enforced code style. Code formatting is done by the Eclipse code formatter, using the config files
-found in the `independent-projects/ide-config` directory. By default when you run `./mvnw install` the code will be formatted automatically.
+found in the `independent-projects/ide-config` directory. By default, when you run `./mvnw install`, the code will be formatted automatically.
 When submitting a pull request the CI build will fail if running the formatter results in any code changes, so it is
 recommended that you always run a full Maven build before submitting a pull request.
 
@@ -288,6 +291,11 @@ navigate to _Editor_ -> _Code Style_ -> _Java_ -> _Imports_
 and set _Class count to use import with '\*'_ to `999`.
 Do the same with _Names count to use static import with '\*'_.
 
+### Gitpod
+
+You can also use [Gitpod](https://gitpod.io) to contribute without installing anything on your computer. Click [here](https://gitpod.io/#https://github.com/quarkusio/quarkus/-/tree/main/) to start a workspace.
+
+
 ## Build
 
 * Clone the repository: `git clone https://github.com/quarkusio/quarkus.git`
@@ -307,10 +315,29 @@ export MAVEN_OPTS="-Xmx4g"
 This build skipped all the tests, native-image builds, documentation generation etc. and used the Maven goals `clean install` by default.
 For more details about `-Dquickly` have a look at the `quick-build` profile in `quarkus-parent` (root `pom.xml`).
 
-Adding `-DskipTests=false -DskipITs=false` enables the tests.
-It will take much longer to build but will give you more guarantees on your code.
+When contributing to Quarkus, it is recommended to respect the following rules.
 
-You can build and test native images in the integration tests supporting it by using `./mvnw install -Dnative`.
+**Contributing to an extension**
+
+When you contribute to an extension, after having applied your changes, run:
+
+* `./mvnw -Dquickly` from the root directory to make sure you haven't broken anything obvious
+* `./mvnw -f extensions/<your-extension> clean install` to run a full build of your extension including the tests
+* `./mvnw -f integration-tests/<your-extension-its> clean install` to make sure ITs are still passing
+* `./mvnw -f integration-tests/<your-extension-its> clean install -Dnative` to test the native build (for small changes, it might not be useful, use your own judgement)
+
+**Contributing to a core artifact**
+
+Obviously, when you contribute to a core artifact of Quarkus, a change may impact any part of Quarkus.
+So the rule of thumb would be to run the full test suite locally but this is clearly impractical as it takes a lot of time/resources.
+
+Thus, it is recommended to use the following approach:
+
+* run `./mvnw -Dquickly` from the root directory to make sure you haven't broken anything obvious
+* run any build that might be useful to test the behavior you changed actually fixes the issue you had (might be an extension build, an integration test build...)
+* push your work to your own fork of Quarkus to trigger CI there
+* you can create a draft pull request to keep track of your work
+* wait until the build is green in your fork (use your own judgement if it's not fully green) before marking your pull request as ready for review (which will trigger Quarkus CI)
 
 ### Workflow tips
 
@@ -415,7 +442,7 @@ Without going too much into details (`devtools/bom-descriptor-json/pom.xml` has 
 
 The GitHub Actions based Quarkus CI is using GIB to reduce the average build time of pull request builds and builds of branches in your fork.
 
-CI is using a slighty different GIB config than locally:
+CI is using a slightly different GIB config than locally:
 
 * [Special handling of "Explicitly selected projects"](https://github.com/gitflow-incremental-builder/gitflow-incremental-builder#explicitly-selected-projects) is deactivated
 * Untracked/uncommitted changes are not considered
@@ -433,10 +460,10 @@ The Asciidoc files can be found in the [`src/main/asciidoc` directory](https://g
 
 When contributing a significant documentation change, it is highly recommended to run the build and check the output.
 
-First build the whole Quarkus repository with the documentation build enabled (`-Dquickly` skips the documentation build):
+First build the whole Quarkus repository with the documentation build enabled:
 
 ```
-./mvnw -Dquickly -DskipDocs=false clean install
+./mvnw -DquicklyDocs
 ```
 
 This will generate the configuration properties documentation includes in the root `target/asciidoc/generated/config/` directory and will avoid a lot of warnings when building the documentation module.
@@ -527,7 +554,7 @@ The TCK module is not part of the main Maven reactor build, but you can enable i
 the Maven Profile `-Ptcks`. If your work is related to any of these areas, running the TCK's is highly recommended to 
 make sure you are not breaking the project. The TCK's will also run on any Pull Request.
 
-You can either run all of the TCK's or just a subset by executing `mvn verify` in the `tcks` module root or each of 
+You can either run all the TCK's or just a subset by executing `mvn verify` in the `tcks` module root or each of 
 the submodules. If you wish to run a particular test, you can use Maven `-Dtest=` property with the fully qualified 
 name of the test class and optionally the method name by using 
 `mvn verify -Dtest=fully.qualified.test.class.name#methodName`.
@@ -555,8 +582,8 @@ Here are a few recommendation guidelines:
 - keep it relatively short so that no hover is required to read it
 - describe the function over the technology
 - use an action / verb to start the sentence
-- do no conjugate the action verb (`Connect foo`, not `Connects foo` nor `Connecting foo`)
-- connectors (JDBC / reactive) etc tend to start with Connect
+- do not conjugate the action verb (`Connect foo`, not `Connects foo` nor `Connecting foo`)
+- connectors (JDBC / reactive) etc. tend to start with Connect
 - do not mention `Quarkus`
 - do not mention `extension`
 - avoid repeating the extension name
@@ -615,7 +642,7 @@ This project is an open source project, please act responsibly, be nice, polite 
   To ensure a consistent build order, even when building in parallel (`./mvnw -T...`) or building incrementally/partially (`./mvnw -pl...`), the build enforces the presence of certain dependencies.
   If those dependencies are not present, your local build will most likely use possibly outdated artifacts from you local repo and CI build might even fail not finding certain artifacts.
 
-  Just do what the failing enforcer rule is telling you and you should be fine.
+  Just do what the failing enforcer rule is telling you, and you should be fine.
 
 * Build fails with multiple `This project has been banned from the build due to previous failures` messages
 

@@ -201,6 +201,7 @@
                 <module>elytron-resteasy</module>
                 <module>elytron-resteasy-reactive</module>
                 <module>elytron-undertow</module>
+                <module>security-webauthn</module>
                 <module>flyway</module>
                 <module>liquibase</module>
                 <module>liquibase-mongodb</module>
@@ -233,6 +234,7 @@
                 <module>kubernetes</module>
                 <module>kubernetes-client</module>
                 <module>kubernetes-service-binding-jdbc</module>
+                <module>kubernetes-service-binding-reactive</module>
                 <module>openshift-client</module>
                 <module>mongodb-client</module>
                 <module>jackson</module>
@@ -304,7 +306,6 @@
                 <module>logging-panache</module>
                 <module>locales</module>
                 <module>redis-devservices</module>
-
                 <!-- gRPC tests -->
                 <module>grpc-tls</module>
                 <module>grpc-plain-text-gzip</module>

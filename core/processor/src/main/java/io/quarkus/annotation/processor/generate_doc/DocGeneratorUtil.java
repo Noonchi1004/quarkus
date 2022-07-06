@@ -19,6 +19,7 @@ import javax.lang.model.type.TypeMirror;
 import io.quarkus.annotation.processor.Constants;
 
 public class DocGeneratorUtil {
+    private static final String NEW_LINE = "\n";
     private static final String CORE = "core";
     private static final String CONFIG = "Config";
     private static final String CONFIGURATION = "Configuration";
@@ -273,7 +274,16 @@ public class DocGeneratorUtil {
             return "";
         }
 
-        return acceptedValues.stream().collect(Collectors.joining("`, `", "`", "`"));
+        return acceptedValues.stream().collect(Collectors.joining("`, `", Constants.CODE_DELIMITER, Constants.CODE_DELIMITER));
+    }
+
+    static String joinEnumValues(List<String> enumValues) {
+        if (enumValues == null || enumValues.isEmpty()) {
+            return Constants.EMPTY;
+        }
+
+        // nested macros are only detected when cell starts with a new line, e.g. a|\n myMacro::[]
+        return NEW_LINE + String.join(", ", enumValues);
     }
 
     static String getTypeFormatInformationNote(ConfigDocKey configDocKey) {
@@ -320,7 +330,7 @@ public class DocGeneratorUtil {
                         break;
                     }
                     if (i > 3 && Constants.CONFIG.equals(subgroup)) {
-                        // this is a bit dark magic but we have config packages as valid extension names
+                        // this is a bit dark magic, but we have config packages as valid extension names
                         // and config packages where the configuration is stored
                         break;
                     }
@@ -464,6 +474,27 @@ public class DocGeneratorUtil {
         }
     }
 
+    /**
+     * Replace each character that is neither alphanumeric nor _ with _ then convert the name to upper case, e.g.
+     * quarkus.datasource.jdbc.initial-size -> QUARKUS_DATASOURCE_JDBC_INITIAL_SIZE
+     * See also: io.smallrye.config.common.utils.StringUtil#replaceNonAlphanumericByUnderscores(java.lang.String)
+     */
+    static String toEnvVarName(final String name) {
+        int length = name.length();
+        StringBuilder sb = new StringBuilder(length);
+        for (int i = 0; i < length; i++) {
+            char c = name.charAt(i);
+            if ('a' <= c && c <= 'z' ||
+                    'A' <= c && c <= 'Z' ||
+                    '0' <= c && c <= '9') {
+                sb.append(c);
+            } else {
+                sb.append('_');
+            }
+        }
+        return sb.toString().toUpperCase();
+    }
+
     static String deriveConfigRootName(String simpleClassName, String prefix, ConfigPhase configPhase) {
         String simpleNameInLowerCase = simpleClassName.toLowerCase();
         int length = simpleNameInLowerCase.length();
@@ -487,7 +518,7 @@ public class DocGeneratorUtil {
      * Sort docs keys. The sorted list will contain the properties in the following order
      * - 1. Map config items as last elements of the generated docs.
      * - 2. Build time properties will come first.
-     * - 3. Otherwise respect source code declaration order.
+     * - 3. Otherwise, respect source code declaration order.
      * - 4. Elements within a configuration section will appear at the end of the generated doc while preserving described in
      * 1-4.
      */

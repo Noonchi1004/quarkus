@@ -15,7 +15,7 @@ public class LRAParticipantTestResourceLifecycle implements QuarkusTestResourceL
     private static GenericContainer<?> registry;
     private static String coordinatorEndpoint;
 
-    // the endpoint on wich an LRA coordinator is listening
+    // the endpoint on which an LRA coordinator is listening
     public static String getCoordinatorEndpoint() {
         return coordinatorEndpoint;
     }
@@ -30,7 +30,7 @@ public class LRAParticipantTestResourceLifecycle implements QuarkusTestResourceL
         Map<String, String> properties = new HashMap<>();
 
         coordinatorEndpoint = String.format("http://%s:%d/%s",
-                registry.getContainerIpAddress(),
+                registry.getHost(),
                 registry.getFirstMappedPort(),
                 LRAConstants.COORDINATOR_PATH_NAME);
 

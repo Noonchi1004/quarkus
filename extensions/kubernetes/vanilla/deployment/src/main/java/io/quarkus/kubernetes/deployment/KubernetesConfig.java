@@ -78,7 +78,7 @@ public class KubernetesConfig implements PlatformConfiguration {
     Map<String, String> annotations;
 
     /**
-     * Whether or not to add the build timestamp to the Kubernetes annotations
+     * Whether to add the build timestamp to the Kubernetes annotations
      * This is a very useful way to have manifests of successive builds of the same
      * application differ - thus ensuring that Kubernetes will apply the updated resources
      */
@@ -235,9 +235,8 @@ public class KubernetesConfig implements PlatformConfiguration {
 
     /**
      * The target deployment platform.
-     * Defaults to kubernetes. Can be kubernetes, openshift, knative, minikube etc, or any combination of the above as comma
-     * separated
-     * list.
+     * Defaults to kubernetes. Can be kubernetes, openshift, knative, minikube etc., or any combination of the above as comma
+     * separated list.
      */
     @ConfigItem
     Optional<List<String>> deploymentTarget;
@@ -297,6 +296,12 @@ public class KubernetesConfig implements PlatformConfiguration {
      */
     @ConfigItem
     SecurityContextConfig securityContext;
+
+    /**
+     * If set, it will change the name of the container according to the configuration
+     */
+    @ConfigItem
+    Optional<String> containerName;
 
     /**
      * Debug configuration to be set in pods.
@@ -393,6 +398,11 @@ public class KubernetesConfig implements PlatformConfiguration {
 
     public Optional<String> getHost() {
         return host;
+    }
+
+    @Override
+    public Optional<String> getContainerName() {
+        return containerName;
     }
 
     public Map<String, PortConfig> getPorts() {

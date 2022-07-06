@@ -183,9 +183,9 @@ public class CliProjectMavenTest {
         CliDriver.Result result = CliDriver.execute(workspaceRoot, "create", "app", "-e", "-B", "--verbose");
         Assertions.assertEquals(CommandLine.ExitCode.OK, result.exitCode, "Expected OK return code." + result);
 
-        // 1 --clean --tests --suspend
+        // 1 --clean --tests --suspend --offline
         result = CliDriver.execute(project, "dev", "-e", "--dry-run",
-                "--clean", "--tests", "--debug", "--suspend", "--debug-mode=listen");
+                "--clean", "--tests", "--debug", "--suspend", "--debug-mode=listen", "--offline");
 
         Assertions.assertEquals(CommandLine.ExitCode.OK, result.exitCode,
                 "Expected OK return code. Result:\n" + result);
@@ -205,6 +205,9 @@ public class CliProjectMavenTest {
 
         Assertions.assertTrue(result.stdout.contains("-Dsuspend"),
                 "mvn command should specify '-Dsuspend'\n" + result);
+
+        Assertions.assertTrue(result.stdout.contains("--offline"),
+                "mvn command should specify --offline\n" + result);
 
         // 2 --no-clean --no-tests --no-debug
         result = CliDriver.execute(project, "dev", "-e", "--dry-run",
@@ -286,7 +289,7 @@ public class CliProjectMavenTest {
                 "--output-directory=" + nested,
                 "silly:my-project:0.1.0");
 
-        // We don't need to retest this, just need to make sure all of the arguments were passed through
+        // We don't need to retest this, just need to make sure all the arguments were passed through
         Assertions.assertEquals(CommandLine.ExitCode.OK, result.exitCode, "Expected OK return code." + result);
 
         Assertions.assertTrue(result.stdout.contains("Creating an app"),
@@ -314,7 +317,7 @@ public class CliProjectMavenTest {
                 "-e", "-B", "--verbose",
                 "--java", "11");
 
-        // We don't need to retest this, just need to make sure all of the arguments were passed through
+        // We don't need to retest this, just need to make sure all the arguments were passed through
         Assertions.assertEquals(CommandLine.ExitCode.OK, result.exitCode, "Expected OK return code." + result);
 
         Path pom = project.resolve("pom.xml");
@@ -330,7 +333,7 @@ public class CliProjectMavenTest {
                 "-e", "-B", "--verbose",
                 "--java", "17");
 
-        // We don't need to retest this, just need to make sure all of the arguments were passed through
+        // We don't need to retest this, just need to make sure all the arguments were passed through
         Assertions.assertEquals(CommandLine.ExitCode.OK, result.exitCode, "Expected OK return code." + result);
 
         Path pom = project.resolve("pom.xml");

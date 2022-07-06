@@ -4,21 +4,17 @@ import io.quarkus.qute.SectionHelperFactory.SectionInitContext;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Function;
 
-/**
- *
- */
 final class SectionInitContextImpl implements SectionInitContext {
 
     private final EngineImpl engine;
     private final List<SectionBlock> blocks;
-    private final Function<String, TemplateException> errorFun;
+    private final ErrorInitializer errorInitializer;
 
-    public SectionInitContextImpl(EngineImpl engine, List<SectionBlock> blocks, Function<String, TemplateException> errorFun) {
+    public SectionInitContextImpl(EngineImpl engine, List<SectionBlock> blocks, ErrorInitializer errorInitializer) {
         this.engine = engine;
         this.blocks = blocks;
-        this.errorFun = errorFun;
+        this.errorInitializer = errorInitializer;
     }
 
     /**
@@ -57,8 +53,8 @@ final class SectionInitContextImpl implements SectionInitContext {
     }
 
     @Override
-    public TemplateException createParserError(String message) {
-        return errorFun.apply(message);
+    public TemplateException.Builder error(String message) {
+        return errorInitializer.error(message);
     }
 
 }

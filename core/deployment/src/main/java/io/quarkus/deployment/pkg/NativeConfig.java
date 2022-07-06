@@ -16,8 +16,8 @@ import io.quarkus.runtime.util.ContainerRuntimeUtil;
 @ConfigRoot(phase = ConfigPhase.BUILD_TIME)
 public class NativeConfig {
 
-    public static final String DEFAULT_GRAALVM_BUILDER_IMAGE = "quay.io/quarkus/ubi-quarkus-native-image:22.0-java11";
-    public static final String DEFAULT_MANDREL_BUILDER_IMAGE = "quay.io/quarkus/ubi-quarkus-mandrel:22.0-java11";
+    public static final String DEFAULT_GRAALVM_BUILDER_IMAGE = "quay.io/quarkus/ubi-quarkus-native-image:22.1-java17";
+    public static final String DEFAULT_MANDREL_BUILDER_IMAGE = "quay.io/quarkus/ubi-quarkus-mandrel:22.1-java17";
 
     /**
      * Comma-separated, additional arguments to pass to the build process.
@@ -94,9 +94,9 @@ public class NativeConfig {
     public Optional<String> userCountry;
 
     /**
-     * Defines the file encoding as in -Dfile.encoding=...
+     * Defines the file encoding as in {@code -Dfile.encoding=...}.
      *
-     * Native image runtime uses the host's (i.e. build time) value of file.encoding
+     * Native image runtime uses the host's (i.e. build time) value of {@code file.encoding}
      * system property. We intentionally default this to UTF-8 to avoid platform specific
      * defaults to be picked up which can then result in inconsistent behavior in the
      * generated native executable.

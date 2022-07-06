@@ -1,6 +1,7 @@
 package io.quarkus.rest.data.panache.deployment.methods;
 
 import static io.quarkus.gizmo.MethodDescriptor.ofMethod;
+import static io.quarkus.rest.data.panache.deployment.utils.SignatureMethodCreator.ofType;
 
 import java.lang.annotation.Annotation;
 import java.util.function.Supplier;
@@ -23,7 +24,7 @@ import io.quarkus.gizmo.TryBlock;
 import io.quarkus.rest.data.panache.RestDataResource;
 import io.quarkus.rest.data.panache.deployment.ResourceMetadata;
 import io.quarkus.rest.data.panache.deployment.properties.ResourceProperties;
-import io.quarkus.rest.data.panache.deployment.utils.ResponseImplementor;
+import io.quarkus.rest.data.panache.deployment.utils.SignatureMethodCreator;
 import io.quarkus.rest.data.panache.deployment.utils.UniImplementor;
 import io.quarkus.rest.data.panache.runtime.UpdateExecutor;
 import io.smallrye.mutiny.Uni;
@@ -133,8 +134,8 @@ public final class UpdateMethodImplementor extends StandardMethodImplementor {
     @Override
     protected void implementInternal(ClassCreator classCreator, ResourceMetadata resourceMetadata,
             ResourceProperties resourceProperties, FieldDescriptor resourceField) {
-        MethodCreator methodCreator = classCreator.getMethodCreator(METHOD_NAME,
-                isNotReactivePanache() ? Response.class : Uni.class,
+        MethodCreator methodCreator = SignatureMethodCreator.getMethodCreator(METHOD_NAME, classCreator,
+                isNotReactivePanache() ? ofType(Response.class) : ofType(Uni.class, resourceMetadata.getEntityType()),
                 resourceMetadata.getIdType(), resourceMetadata.getEntityType());
 
         // Add method annotations
@@ -142,7 +143,7 @@ public final class UpdateMethodImplementor extends StandardMethodImplementor {
         addPutAnnotation(methodCreator);
         addPathParamAnnotation(methodCreator.getParameterAnnotations(0), "id");
         addConsumesAnnotation(methodCreator, APPLICATION_JSON);
-        addProducesAnnotation(methodCreator, APPLICATION_JSON);
+        addProducesJsonAnnotation(methodCreator, resourceProperties);
         addLinksAnnotation(methodCreator, resourceMetadata.getEntityType(), REL);
         // Add parameter annotations
         if (withValidation) {
@@ -185,9 +186,9 @@ public final class UpdateMethodImplementor extends StandardMethodImplementor {
                             (updateBody, itemUpdated) -> {
                                 BranchResult ifEntityIsNew = updateBody.ifNull(itemWasFound);
                                 ifEntityIsNew.trueBranch()
-                                        .returnValue(ResponseImplementor.created(ifEntityIsNew.trueBranch(), itemUpdated));
+                                        .returnValue(responseImplementor.created(ifEntityIsNew.trueBranch(), itemUpdated));
                                 ifEntityIsNew.falseBranch()
-                                        .returnValue(ResponseImplementor.noContent(ifEntityIsNew.falseBranch()));
+                                        .returnValue(responseImplementor.noContent(ifEntityIsNew.falseBranch()));
                             }));
                 }));
     }
@@ -206,8 +207,8 @@ public final class UpdateMethodImplementor extends StandardMethodImplementor {
                 updateExecutor, updateFunction);
 
         BranchResult createdNewEntity = tryBlock.ifNotNull(newEntity);
-        createdNewEntity.trueBranch().returnValue(ResponseImplementor.created(createdNewEntity.trueBranch(), newEntity));
-        createdNewEntity.falseBranch().returnValue(ResponseImplementor.noContent(createdNewEntity.falseBranch()));
+        createdNewEntity.trueBranch().returnValue(responseImplementor.created(createdNewEntity.trueBranch(), newEntity));
+        createdNewEntity.falseBranch().returnValue(responseImplementor.noContent(createdNewEntity.falseBranch()));
     }
 
     private ResultHandle getUpdateFunction(BytecodeCreator creator, String resourceClass, ResultHandle resource,

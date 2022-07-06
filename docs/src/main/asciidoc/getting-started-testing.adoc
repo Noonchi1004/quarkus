@@ -27,7 +27,7 @@ This guide covers:
 
 == Prerequisites
 
-include::includes/devtools/prerequisites.adoc[]
+include::{includes}/prerequisites.adoc[]
 * The completed greeter application from the xref:getting-started.adoc[Getting Started Guide]
 
 == Architecture
@@ -379,7 +379,7 @@ As mentioned above Quarkus tests are actually full CDI beans, and as such you ca
 normally. As an example, if you want a test method to run within the context of a transaction you can simply apply the
 `@Transactional` annotation to the method and the transaction interceptor will handle it.
 
-In addition to this you can also create your own test stereotypes. For example we could create a `@TransactionalQuarkusTest`
+In addition to this you can also create your own test stereotypes. For example, we could create a `@TransactionalQuarkusTest`
 as follows:
 
 [source,java]
@@ -462,7 +462,7 @@ WARNING: While it is possible to use JUnit Jupiter callback interfaces like `Bef
 == Testing Different Profiles
 
 So far in all our examples we only start Quarkus once for all tests. Before the first test is run Quarkus will boot,
-then all tests will run, then Quarkus will shutdown at the end. This makes for a very fast testing experience however
+then all tests will run, then Quarkus will shut down at the end. This makes for a very fast testing experience however
 it is a bit limited as you can't test different configurations.
 
 To get around this Quarkus supports the idea of a test profile. If a test has a different profile to the previously
@@ -472,10 +472,10 @@ a bit slower, as it adds a shutdown/startup cycle to the test time, but gives a 
 To reduce the amount of times Quarkus needs to restart, `io.quarkus.test.junit.util.QuarkusTestProfileAwareClassOrderer`
 is registered as a global `ClassOrderer` as described in the
 link:https://junit.org/junit5/docs/current/user-guide/#writing-tests-test-execution-order-classes[JUnit 5 User Guide].
-The behavior of this orderer is configurable via `junit-platform.properties` (see the source code or javadoc for more details).
-It can also be disabled entirely by setting another orderer that is provided by JUnit 5 or even your own custom one. +
+The behavior of this `ClassOrderer` is configurable via `junit-platform.properties` (see the source code or javadoc for more details).
+It can also be disabled entirely by setting another `ClassOrderer` that is provided by JUnit 5 or even your own custom one. +
 Please note that as of JUnit 5.8.2 link:https://github.com/junit-team/junit5/issues/2794[only a single `junit-platform.properties` is picked up and a warning is logged if more than one is found].
-If you encounter such warnings, you can can get rid of them by removing the Quarkus-supplied `junit-platform.properties` from the classpath via an exclusion:
+If you encounter such warnings, you can get rid of them by removing the Quarkus-supplied `junit-platform.properties` from the classpath via an exclusion:
 [source,xml]
 ----
 <dependency>
@@ -752,7 +752,7 @@ public class MockExternalService extends ExternalService {
 It is important that the alternative be present in the `src/test/java` directory rather than `src/main/java`, as otherwise
 it will take effect all the time, not just when testing.
 
-Note that at present this approach does not work with native image testing, as this would required the test alternatives
+Note that at present this approach does not work with native image testing, as this would require the test alternatives
 to be baked into the native image.
 
 [[quarkus_mock]]
@@ -938,7 +938,7 @@ public class MockGreetingServiceTest {
 ----
 <1> Since we configured `greetingService` as a mock, the `GreetingResource` which uses the `GreetingService` bean, we get the mocked response instead of the response of the regular `GreetingService` bean
 
-By default the `@InjectMock` annotation can be used for any normal CDI scoped bean (e.g. `@ApplicationScoped`, `@RequestScoped`).
+By default, the `@InjectMock` annotation can be used for any normal CDI scoped bean (e.g. `@ApplicationScoped`, `@RequestScoped`).
 Mocking `@Singleton` beans can be performed by setting the `convertScopes` property to true (such as `@InjectMock(convertScopes = true`).
 This will convert the `@Singleton` bean to an `@ApplicationScoped` bean for the test.
 
@@ -1209,7 +1209,7 @@ guide except injecting into tests (and the native executable runs in a separate 
 This is covered in the xref:building-native-image.adoc[Native Executable Guide].
 
 [#quarkus-integration-test]
-== Using @QuarkusIntegrationTest
+== Using `@QuarkusIntegrationTest`
 
 `@QuarkusIntegrationTest` should be used to launch and test the artifact produced by the Quarkus build, and supports testing a jar (of whichever type), a native image or container image.
 Put simply, this means that if the result of a Quarkus build (`mvn package` or `gradle build`) is a jar, that jar will be launched as `java -jar ...` and tests run against it.
@@ -1221,9 +1221,59 @@ As is the case with `@NativeImageTest`, this is a black box test that supports t
 
 [NOTE]
 ====
-As a test annotated with `@QuarkusIntegrationTest` tests the result of the build, it should be run as part of the integration test suite - i.e. via the `maven-failsafe-plugin` if using Maven or the `quarkusIntTest` task if using Gradle.
+As a test annotated with `@QuarkusIntegrationTest` tests the result of the build, it should be run as part of the integration test suite - i.e. by setting `-DskipITs=false` if using Maven or the `quarkusIntTest` task if using Gradle.
 These tests will **not** work if run in the same phase as `@QuarkusTest` as Quarkus has not yet created the final artifact.
 ====
+
+The `pom.xml` file contains:
+
+[source, xml]
+----
+<plugin>
+    <groupId>org.apache.maven.plugins</groupId>
+    <artifactId>maven-failsafe-plugin</artifactId>
+    <version>${surefire-plugin.version}</version>
+    <executions>
+        <execution>
+            <goals>
+                <goal>integration-test</goal>
+                <goal>verify</goal>
+            </goals>
+            <configuration>
+                <systemPropertyVariables>
+                    <native.image.path>${project.build.directory}/${project.build.finalName}-runner</native.image.path>
+                    <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
+                    <maven.home>${maven.home}</maven.home>
+                </systemPropertyVariables>
+            </configuration>
+        </execution>
+    </executions>
+</plugin>
+----
+
+This instructs the failsafe-maven-plugin to run integration-test.
+
+Then, open the `src/test/java/org/acme/quickstart/GreetingResourceIT.java`. It contains:
+
+[source,java]
+----
+package org.acme.quickstart;
+
+
+import io.quarkus.test.junit.QuarkusIntegrationTest;
+
+@QuarkusIntegrationTest // <1>
+public class GreetingResourceIT extends GreetingResourceTest { // <2>
+
+    // Run the same tests
+
+}
+----
+<1> Use another test runner that starts the application from the native file before the tests.
+The executable is retrieved by the _Failsafe Maven Plugin_.
+<2> We extend our previous tests as a convenience, but you can also implement your tests.
+
+More information can be found in the link:building-native-image#testing-the-native-executable[Testing the native executable Guide].
 
 === Launching containers
 
@@ -1231,10 +1281,19 @@ When `@QuarkusIntegrationTest` results in launching a container (because the app
 This means that `@QuarkusIntegrationTest` works out of the box with containers launched via xref:dev-services.adoc[Dev Services], but it also means that it enables using <<quarkus-test-resource,QuarkusTestLifecycleManager>> resources that launch additional containers.
 This can be achieved by having your `QuarkusTestLifecycleManager` implement `io.quarkus.test.common.DevServicesContext.ContextAware`. A simple example could be the following:
 
+The container running the resource to test against, for example PostgreSQL via Testcontainers, is assigned an IP address from the container's network.
+Use the container's "public" IP from its network and the "unmapped" port number to connect to the service.
+The Testcontainers library usually return connection strings without respecting the container network, so additional code is needed to provide Quarkus the "correct" connection string using the container's IP on the container network and the _unmapped_ port number.
+
+The following example illustrates the use with PostgreSQL, but the approach is applicable to all containers.
+
 [source,java]
 ----
 import io.quarkus.test.common.DevServicesContext;
 import io.quarkus.test.common.QuarkusTestResourceLifecycleManager;
+
+import org.testcontainers.containers.JdbcDatabaseContainer;
+import org.testcontainers.containers.PostgreSQLContainer;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -1243,6 +1302,7 @@ import java.util.Optional;
 public class CustomResource implements QuarkusTestResourceLifecycleManager, DevServicesContext.ContextAware {
 
     private Optional<String> containerNetworkId;
+    private JdbcDatabaseContainer container;
 
     @Override
     public void setIntegrationTestContext(DevServicesContext context) {
@@ -1252,9 +1312,36 @@ public class CustomResource implements QuarkusTestResourceLifecycleManager, DevS
     @Override
     public Map<String, String> start() {
         // start a container making sure to call withNetworkMode() with the value of containerNetworkId if present
+        container = new PostgreSQLContainer<>("postgres:latest").withLogConsumer(outputFrame -> {});
+
+        // apply the network to the container
+        containerNetworkId.ifPresent(container::withNetworkMode);
+
+        String jdbcUrl = container.getJdbcUrl();
+        if (containerNetworkId.isPresent()) {
+            // Replace hostname + port in the provided JDBC URL with the hostname of the Docker container
+            // running PostgreSQL and the listening port.
+            jdbcUrl = fixJdbcUrl(jdbcUrl);
+        }
 
         // return a map containing the configuration the application needs to use the service
-        return new HashMap<>();
+        return ImmutableMap.of(
+            "quarkus.datasource.username", container.getUsername(),
+            "quarkus.datasource.password", container.getPassword(),
+            "quarkus.datasource.jdbc.url", jdbcUrl);
+    }
+
+    private String fixJdbcUrl(String jdbcUrl) {
+        // Part of the JDBC URL to replace
+        String hostPort = container.getHost() + ':' + container.getMappedPort(PostgreSQLContainer.POSTGRESQL_PORT);
+
+        // Host/IP on the container network plus the unmapped port
+        String networkHostPort =
+            container.getCurrentContainerInfo().getConfig().getHostName()
+            + ':'
+            + PostgreSQLContainer.POSTGRESQL_PORT;
+
+        return jdbcUrl.replace(hostPort, networkHostPort);
     }
 
     @Override
@@ -1365,13 +1452,13 @@ The `settings.json` placed in the root of your project directory or in the works
 ]
 ----
 
-=== IntelliJ JUnit template
+=== IntelliJ IDEA JUnit template
 
-Nothing needed in IntelliJ because the IDE will pick the `systemPropertyVariables` from the surefire plugin configuration in `pom.xml`.
+Nothing needed in IntelliJ IDEA because the IDE will pick the `systemPropertyVariables` from the surefire plugin configuration in `pom.xml`.
 
 == Testing Dev Services
 
-By default tests should just work with xref:dev-services.adoc[Dev Services], however from some use cases you may need access to
+By default, tests should just work with xref:dev-services.adoc[Dev Services], however from some use cases you may need access to
 the automatically configured properties in your tests.
 
 You can do this with `io.quarkus.test.common.DevServicesContext`, which can be injected directly into any `@QuarkusTest`
@@ -1385,7 +1472,7 @@ have a field that implements `io.quarkus.test.common.DevServicesContext.ContextA
 a utility class.
 
 `QuarkusTestResourceLifecycleManager` implementations can also implement `ContextAware` to get access to these properties,
-which allows you to setup the resource before Quarkus starts (e.g. configure a KeyCloak instance, add data to a database etc).
+which allows you to set up the resource before Quarkus starts (e.g. configure a KeyCloak instance, add data to a database etc).
 
 
 [NOTE]

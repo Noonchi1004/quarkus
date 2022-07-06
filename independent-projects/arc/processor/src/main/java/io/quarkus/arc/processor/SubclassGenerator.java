@@ -239,10 +239,8 @@ public class SubclassGenerator extends AbstractGenerator {
             @Override
             public ResultHandle apply(BindingKey key) {
                 // Create annotation literal if needed
-                ClassInfo bindingClass = bean.getDeployment()
-                        .getInterceptorBinding(key.annotation.name());
-                return annotationLiterals.process(constructor, classOutput, bindingClass, key.annotation,
-                        Types.getPackageName(subclass.getClassName()));
+                ClassInfo bindingClass = bean.getDeployment().getInterceptorBinding(key.annotation.name());
+                return annotationLiterals.create(constructor, bindingClass, key.annotation);
             }
         };
         // Shared lists of interceptor bindings literals
@@ -300,7 +298,7 @@ public class SubclassGenerator extends AbstractGenerator {
             InterceptionInfo interception = bean.getInterceptedMethods().get(method);
             DecorationInfo decoration = bean.getDecoratedMethods().get(method);
             MethodDescriptor forwardDescriptor = forwardingMethods.get(methodDescriptor);
-            List<Type> parameters = method.parameters();
+            List<Type> parameters = method.parameterTypes();
 
             if (interception != null) {
                 // Each intercepted method has a corresponding InterceptedMethodMetadata field
@@ -512,7 +510,7 @@ public class SubclassGenerator extends AbstractGenerator {
             ResultHandle delegateTo;
 
             // Method params
-            List<Type> parameters = method.parameters();
+            List<Type> parameters = method.parameterTypes();
             ResultHandle[] params = new ResultHandle[parameters.size()];
             for (int i = 0; i < parameters.size(); ++i) {
                 params[i] = forward.getMethodParam(i);
@@ -650,7 +648,7 @@ public class SubclassGenerator extends AbstractGenerator {
                 methodDescriptor.getReturnType(),
                 methodDescriptor.getParameterTypes());
         MethodCreator forward = subclass.getMethodCreator(forwardDescriptor);
-        List<Type> parameters = method.parameters();
+        List<Type> parameters = method.parameterTypes();
         ResultHandle[] params = new ResultHandle[parameters.size()];
         for (int i = 0; i < parameters.size(); ++i) {
             params[i] = forward.getMethodParam(i);
@@ -670,7 +668,7 @@ public class SubclassGenerator extends AbstractGenerator {
 
         // Params
         // Object[] params = new Object[] {p1}
-        List<Type> parameters = method.parameters();
+        List<Type> parameters = method.parameterTypes();
         ResultHandle paramsHandle;
         if (parameters.isEmpty()) {
             paramsHandle = interceptedMethod.loadNull();
@@ -812,8 +810,7 @@ public class SubclassGenerator extends AbstractGenerator {
                 // Create annotation literals first
                 ClassInfo bindingClass = bean.getDeployment().getInterceptorBinding(binding.name());
                 destroy.writeArrayValue(bindingsArray, bindingsIndex++,
-                        annotationLiterals.process(destroy, classOutput, bindingClass, binding,
-                                Types.getPackageName(subclass.getClassName())));
+                        annotationLiterals.create(destroy, bindingClass, binding));
             }
 
             // try

@@ -37,6 +37,7 @@ import io.quarkus.arc.deployment.UnremovableBeanBuildItem.BeanClassAnnotationExc
 import io.quarkus.arc.processor.AnnotationsTransformer;
 import io.quarkus.arc.processor.BeanInfo;
 import io.quarkus.arc.processor.DotNames;
+import io.quarkus.bootstrap.classloading.QuarkusClassLoader;
 import io.quarkus.builder.item.SimpleBuildItem;
 import io.quarkus.deployment.Feature;
 import io.quarkus.deployment.GeneratedClassGizmoAdaptor;
@@ -73,13 +74,13 @@ import io.quarkus.smallrye.reactivemessaging.runtime.SmallRyeReactiveMessagingRe
 import io.quarkus.smallrye.reactivemessaging.runtime.WorkerConfiguration;
 import io.quarkus.smallrye.reactivemessaging.runtime.devmode.DevModeSupportConnectorFactory;
 import io.quarkus.smallrye.reactivemessaging.runtime.devmode.DevModeSupportConnectorFactoryInterceptor;
+import io.smallrye.reactive.messaging.EmitterConfiguration;
 import io.smallrye.reactive.messaging.Invoker;
 import io.smallrye.reactive.messaging.annotations.Blocking;
 import io.smallrye.reactive.messaging.health.SmallRyeReactiveMessagingLivenessCheck;
 import io.smallrye.reactive.messaging.health.SmallRyeReactiveMessagingReadinessCheck;
 import io.smallrye.reactive.messaging.health.SmallRyeReactiveMessagingStartupCheck;
 import io.smallrye.reactive.messaging.providers.extension.ChannelConfiguration;
-import io.smallrye.reactive.messaging.providers.extension.EmitterConfiguration;
 
 public class SmallRyeReactiveMessagingProcessor {
 
@@ -114,7 +115,7 @@ public class SmallRyeReactiveMessagingProcessor {
             public void transform(AnnotationsTransformer.TransformationContext ctx) {
                 if (ctx.isClass()) {
                     ClassInfo clazz = ctx.getTarget().asClass();
-                    Map<DotName, List<AnnotationInstance>> annotations = clazz.annotations();
+                    Map<DotName, List<AnnotationInstance>> annotations = clazz.annotationsMap();
                     if (scopes.isScopeDeclaredOn(clazz)
                             || annotations.containsKey(ReactiveMessagingDotNames.JAXRS_PATH)
                             || annotations.containsKey(ReactiveMessagingDotNames.REST_CONTROLLER)
@@ -272,8 +273,8 @@ public class SmallRyeReactiveMessagingProcessor {
     }
 
     private boolean isSuspendMethod(MethodInfo methodInfo) {
-        if (!methodInfo.parameters().isEmpty()) {
-            return methodInfo.parameters().get(methodInfo.parameters().size() - 1).name()
+        if (!methodInfo.parameterTypes().isEmpty()) {
+            return methodInfo.parameterType(methodInfo.parametersCount() - 1).name()
                     .equals(ReactiveMessagingDotNames.CONTINUATION);
         }
         return false;
@@ -308,7 +309,7 @@ public class SmallRyeReactiveMessagingProcessor {
         }
         StringBuilder sigBuilder = new StringBuilder();
         sigBuilder.append(method.name()).append("_").append(method.returnType().name().toString());
-        for (Type i : method.parameters()) {
+        for (Type i : method.parameterTypes()) {
             sigBuilder.append(i.name().toString());
         }
         String targetPackage = DotNames.internalPackageNameWithTrailingSlash(bean.getImplClazz().name());
@@ -356,14 +357,14 @@ public class SmallRyeReactiveMessagingProcessor {
             try (MethodCreator invoke = invoker.getMethodCreator(
                     MethodDescriptor.ofMethod(generatedName, "invoke", Object.class, Object[].class))) {
 
-                int parametersCount = method.parameters().size();
+                int parametersCount = method.parametersCount();
                 String[] argTypes = new String[parametersCount];
                 ResultHandle[] args = new ResultHandle[parametersCount];
                 for (int i = 0; i < parametersCount; i++) {
                     // the only method argument of io.smallrye.reactive.messaging.Invoker is an object array, so we need to pull out
                     // each argument and put it in the target method arguments array
                     args[i] = invoke.readArrayValue(invoke.getMethodParam(0), i);
-                    argTypes[i] = method.parameters().get(i).name().toString();
+                    argTypes[i] = method.parameterType(i).name().toString();
                 }
                 ResultHandle result = invoke.invokeVirtualMethod(
                         MethodDescriptor.ofMethod(beanInstanceType, method.name(),
@@ -399,9 +400,9 @@ public class SmallRyeReactiveMessagingProcessor {
 
             try (MethodCreator invoke = invoker.getMethodCreator("invokeBean", Object.class, Object.class, Object[].class,
                     ReactiveMessagingDotNames.CONTINUATION.toString())) {
-                ResultHandle[] args = new ResultHandle[method.parameters().size()];
+                ResultHandle[] args = new ResultHandle[method.parametersCount()];
                 ResultHandle array = invoke.getMethodParam(1);
-                for (int i = 0; i < method.parameters().size() - 1; ++i) {
+                for (int i = 0; i < method.parametersCount() - 1; ++i) {
                     args[i] = invoke.readArrayValue(array, i);
                 }
                 args[args.length - 1] = invoke.getMethodParam(2);
@@ -448,10 +449,9 @@ public class SmallRyeReactiveMessagingProcessor {
 
     @BuildStep
     CoroutineConfigurationBuildItem producesCoroutineConfiguration() {
-        try {
-            Class.forName("kotlinx.coroutines.future.FutureKt", false, getClass().getClassLoader());
+        if (QuarkusClassLoader.isClassPresentAtRuntime("kotlinx.coroutines.future.FutureKt")) {
             return new CoroutineConfigurationBuildItem(true);
-        } catch (ClassNotFoundException e) {
+        } else {
             return new CoroutineConfigurationBuildItem(false);
         }
     }

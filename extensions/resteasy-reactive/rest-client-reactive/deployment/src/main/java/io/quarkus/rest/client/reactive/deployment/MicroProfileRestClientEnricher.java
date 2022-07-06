@@ -91,7 +91,6 @@ class MicroProfileRestClientEnricher implements JaxrsClientReactiveEnricher {
 
         AnnotationInstance registerClientHeaders = interfaceClass.classAnnotation(REGISTER_CLIENT_HEADERS);
 
-        boolean useDefaultHeaders = true;
         if (registerClientHeaders != null) {
             String headersFactoryClass = registerClientHeaders.valueWithDefault(index)
                     .asClass().name().toString();
@@ -108,12 +107,12 @@ class MicroProfileRestClientEnricher implements JaxrsClientReactiveEnricher {
                 clientHeadersFactory = constructor
                         .invokeInterfaceMethod(MethodDescriptor.ofMethod(InstanceHandle.class, "get", Object.class),
                                 instanceHandle);
-                useDefaultHeaders = false;
+            } else {
+                clientHeadersFactory = constructor
+                        .newInstance(MethodDescriptor.ofConstructor(DEFAULT_HEADERS_FACTORY));
             }
-        }
-        if (useDefaultHeaders) {
-            clientHeadersFactory = constructor
-                    .newInstance(MethodDescriptor.ofConstructor(DEFAULT_HEADERS_FACTORY));
+        } else {
+            clientHeadersFactory = constructor.loadNull();
         }
 
         ResultHandle restClientFilter = constructor.newInstance(
@@ -340,9 +339,9 @@ class MicroProfileRestClientEnricher implements JaxrsClientReactiveEnricher {
                 }
                 headerFillingMethod = findMethod(clazz, declaringClass, staticMethodName);
 
-                if (headerFillingMethod.parameters().size() == 0) {
+                if (headerFillingMethod.parametersCount() == 0) {
                     headerValue = fillHeader.invokeStaticMethod(headerFillingMethod);
-                } else if (headerFillingMethod.parameters().size() == 1 && isString(headerFillingMethod.parameters().get(0))) {
+                } else if (headerFillingMethod.parametersCount() == 1 && isString(headerFillingMethod.parameterType(0))) {
                     headerValue = fillHeader.invokeStaticMethod(headerFillingMethod, fillHeader.load(headerName));
                 } else {
                     throw new RestClientDefinitionException(
@@ -361,9 +360,9 @@ class MicroProfileRestClientEnricher implements JaxrsClientReactiveEnricher {
                             "ClientHeaderParam method " + methodName + " not found on " + declaringClass);
                 }
 
-                if (headerFillingMethod.parameters().size() == 0) {
+                if (headerFillingMethod.parametersCount() == 0) {
                     headerValue = fillHeader.invokeInterfaceMethod(headerFillingMethod, interfaceMock);
-                } else if (headerFillingMethod.parameters().size() == 1 && isString(headerFillingMethod.parameters().get(0))) {
+                } else if (headerFillingMethod.parametersCount() == 1 && isString(headerFillingMethod.parameterType(0))) {
                     headerValue = fillHeader.invokeInterfaceMethod(headerFillingMethod, interfaceMock,
                             fillHeader.load(headerName));
                 } else {

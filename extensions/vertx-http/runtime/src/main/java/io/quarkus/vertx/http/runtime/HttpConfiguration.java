@@ -1,7 +1,6 @@
 package io.quarkus.vertx.http.runtime;
 
 import java.time.Duration;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -10,8 +9,6 @@ import io.quarkus.runtime.LaunchMode;
 import io.quarkus.runtime.annotations.ConfigItem;
 import io.quarkus.runtime.annotations.ConfigPhase;
 import io.quarkus.runtime.annotations.ConfigRoot;
-import io.quarkus.vertx.http.Compressed;
-import io.quarkus.vertx.http.Uncompressed;
 import io.quarkus.vertx.http.runtime.cors.CORSConfig;
 
 @ConfigRoot(phase = ConfigPhase.RUN_TIME)
@@ -66,26 +63,6 @@ public class HttpConfiguration {
     public int testSslPort;
 
     /**
-     * If this is true then the address, scheme etc will be set from headers forwarded by the proxy server, such as
-     * {@code X-Forwarded-For}. This should only be set if you are behind a proxy that sets these headers.
-     *
-     * @deprecated use quarkus.http.proxy.proxy-address-forwarding instead.
-     */
-    @Deprecated
-    @ConfigItem
-    public Optional<Boolean> proxyAddressForwarding;
-
-    /**
-     * If this is true and proxy address forwarding is enabled then the standard {@code Forwarded} header will be used,
-     * rather than the more common but not standard {@code X-Forwarded-For}.
-     *
-     * @deprecated use quarkus.http.proxy.allow-forwarded instead.
-     */
-    @Deprecated
-    @ConfigItem
-    public Optional<Boolean> allowForwarded;
-
-    /**
      * If insecure (i.e. http rather than https) requests are allowed. If this is {@code enabled}
      * then http works as normal. {@code redirect} will still open the http port, but
      * all requests will be redirected to the HTTPS port. {@code disabled} will prevent the HTTP
@@ -113,6 +90,13 @@ public class HttpConfiguration {
      * The SSL config
      */
     public ServerSslConfig ssl;
+
+    /**
+     * When set to {@code true}, the HTTP server automatically sends `100 CONTINUE`
+     * response when the request expects it (with the `Expect: 100-Continue` header).
+     */
+    @ConfigItem(defaultValue = "false", name = "handle-100-continue-automatically")
+    public boolean handle100ContinueAutomatically;
 
     /**
      * The number if IO threads used to perform IO. This will be automatically set to a reasonable value based on
@@ -187,7 +171,7 @@ public class HttpConfiguration {
     /**
      * The accept backlog, this is how many connections can be waiting to be accepted before connections start being rejected
      */
-    @ConfigItem
+    @ConfigItem(defaultValue = "-1")
     public int acceptBacklog;
 
     /**
@@ -219,41 +203,6 @@ public class HttpConfiguration {
     public Map<String, SameSiteCookieConfig> sameSiteCookie;
 
     /**
-     * If responses should be compressed.
-     *
-     * Note that this will attempt to compress all responses, to avoid compressing
-     * already compressed content (such as images) you need to set the following header:
-     *
-     * Content-Encoding: identity
-     *
-     * Which will tell vert.x not to compress the response.
-     */
-    @ConfigItem
-    public boolean enableCompression;
-
-    /**
-     * When enabled, vert.x will decompress the request's body if it's compressed.
-     *
-     * Note that the compression format (e.g., gzip) must be specified in the Content-Encoding header
-     * in the request.
-     */
-    @ConfigItem
-    public boolean enableDecompression;
-
-    /**
-     * List of media types for which the compression should be enabled automatically, unless declared explicitly via
-     * {@link Compressed} or {@link Uncompressed}.
-     */
-    @ConfigItem(defaultValue = "text/html,text/plain,text/xml,text/css,text/javascript,application/javascript")
-    public Optional<List<String>> compressMediaTypes;
-
-    /**
-     * The compression level used when compression support is enabled.
-     */
-    @ConfigItem
-    public OptionalInt compressionLevel;
-
-    /**
      * Provides a hint (optional) for the default content type of responses generated for
      * the errors not handled by the application.
      * <p>
@@ -272,6 +221,12 @@ public class HttpConfiguration {
      */
     @ConfigItem
     public Map<String, HeaderConfig> header;
+
+    /**
+     * Additional HTTP configuration per path
+     */
+    @ConfigItem
+    public Map<String, FilterConfig> filter;
 
     public ProxyConfig proxy;
 

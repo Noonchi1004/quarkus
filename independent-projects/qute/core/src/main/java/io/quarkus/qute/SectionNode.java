@@ -2,11 +2,13 @@ package io.quarkus.qute;
 
 import io.quarkus.qute.SectionHelper.SectionResolutionContext;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import org.jboss.logging.Logger;
 
 /**
@@ -17,7 +19,7 @@ class SectionNode implements TemplateNode {
     private static final Logger LOG = Logger.getLogger("io.quarkus.qute.nodeResolve");
 
     static Builder builder(String helperName, Origin origin, Function<String, Expression> expressionFun,
-            Function<String, TemplateException> errorFun) {
+            ErrorInitializer errorFun) {
         return new Builder(helperName, origin, expressionFun, errorFun);
     }
 
@@ -38,9 +40,9 @@ class SectionNode implements TemplateNode {
     @Override
     public CompletionStage<ResultNode> resolve(ResolutionContext context) {
         if (traceLevel && !Parser.ROOT_HELPER_NAME.equals(name)) {
-            LOG.tracef("Resolve {#%s} started: %s", name, origin);
+            LOG.tracef("Resolve {#%s} started:%s", name, origin);
             return helper.resolve(new SectionResolutionContextImpl(context)).thenApply(r -> {
-                LOG.tracef("Resolve {#%s} completed: %s", name, origin);
+                LOG.tracef("Resolve {#%s} completed:%s", name, origin);
                 return r;
             });
         }
@@ -73,6 +75,31 @@ class SectionNode implements TemplateNode {
         return expressions;
     }
 
+    public Expression findExpression(Predicate<Expression> predicate) {
+        for (SectionBlock block : blocks) {
+            Expression found = block.find(predicate);
+            if (found != null) {
+                return found;
+            }
+        }
+        return null;
+    }
+
+    @Override
+    public List<ParameterDeclaration> getParameterDeclarations() {
+        List<ParameterDeclaration> declarations = null;
+        for (SectionBlock block : blocks) {
+            List<ParameterDeclaration> blockDeclarations = block.getParamDeclarations();
+            if (!blockDeclarations.isEmpty()) {
+                if (declarations == null) {
+                    declarations = new ArrayList<>();
+                }
+                declarations.addAll(blockDeclarations);
+            }
+        }
+        return declarations != null ? declarations : Collections.emptyList();
+    }
+
     static class Builder {
 
         final String helperName;
@@ -81,15 +108,17 @@ class SectionNode implements TemplateNode {
         private SectionBlock.Builder currentBlock;
         SectionHelperFactory<?> factory;
         private EngineImpl engine;
+        private final ErrorInitializer errorInitializer;
 
         Builder(String helperName, Origin origin, Function<String, Expression> expressionFun,
-                Function<String, TemplateException> errorFun) {
+                ErrorInitializer errorInitializer) {
             this.helperName = helperName;
             this.origin = origin;
             this.blocks = new ArrayList<>();
+            this.errorInitializer = errorInitializer;
             // The main block is always present
             addBlock(SectionBlock
-                    .builder(SectionHelperFactory.MAIN_BLOCK_NAME, expressionFun, errorFun)
+                    .builder(SectionHelperFactory.MAIN_BLOCK_NAME, expressionFun, errorInitializer)
                     .setOrigin(origin));
         }
 
@@ -126,18 +155,7 @@ class SectionNode implements TemplateNode {
             }
             List<SectionBlock> blocks = builder.build();
             return new SectionNode(helperName, blocks,
-                    factory.initialize(new SectionInitContextImpl(engine, blocks, this::createParserError)), origin);
-        }
-
-        TemplateException createParserError(String message) {
-            StringBuilder builder = new StringBuilder("Parser error");
-            if (!origin.getTemplateId().equals(origin.getTemplateGeneratedId())) {
-                builder.append(" in template [").append(origin.getTemplateId()).append("]");
-            }
-            builder.append(" on line ").append(origin.getLine()).append(": ")
-                    .append(message);
-            return new TemplateException(origin,
-                    builder.toString());
+                    factory.initialize(new SectionInitContextImpl(engine, blocks, errorInitializer)), origin);
         }
 
     }

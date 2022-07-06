@@ -399,7 +399,6 @@ public class ClientSendRequestHandler implements ClientRestHandler {
                     .failure(new IllegalArgumentException("Invalid REST Client URL used: '" + uri + "'"));
         }
         if (uri.getScheme().startsWith(Stork.STORK)) {
-            boolean isHttps = "storks".equals(uri.getScheme());
             String serviceName = uri.getHost();
             if (serviceName == null) { // invalid URI
                 return Uni.createFrom()
@@ -420,6 +419,9 @@ public class ClientSendRequestHandler implements ClientRestHandler {
                     if (serviceInstance.gatherStatistics() && shouldMeasureTime(state)) {
                         state.setCallStatsCollector(serviceInstance);
                     }
+
+                    boolean isHttps = serviceInstance.isSecure() || "storks".equals(uri.getScheme());
+
                     return new RequestOptions()
                             .setHost(serviceInstance.getHost())
                             .setPort(serviceInstance.getPort())
@@ -443,7 +445,7 @@ public class ClientSendRequestHandler implements ClientRestHandler {
 
         return requestOptions.onItem()
                 .transform(r -> r.setMethod(HttpMethod.valueOf(state.getHttpMethod()))
-                        .setURI(uri.getPath() + (uri.getRawQuery() == null ? "" : "?" + uri.getRawQuery()))
+                        .setURI(uri.getRawPath() + (uri.getRawQuery() == null ? "" : "?" + uri.getRawQuery()))
                         .setFollowRedirects(followRedirects))
                 .onItem().invoke(r -> {
                     if (readTimeout instanceof Long) {

@@ -24,7 +24,7 @@ import io.quarkus.test.QuarkusUnitTest;
 /**
  * @tpSubChapter Resource
  * @tpChapter Integration tests
- * @tpTestCaseDetails Tests annotation inheritence from interface.
+ * @tpTestCaseDetails Tests annotation inheritance from interface.
  * @tpSince RESTEasy 3.0.20
  */
 @DisplayName("Inheritance Test")
@@ -34,7 +34,7 @@ public class InheritanceTest {
 
     @RegisterExtension
     static QuarkusUnitTest testExtension = new QuarkusUnitTest()
-            .setArchiveProducer(new Supplier<JavaArchive>() {
+            .setArchiveProducer(new Supplier<>() {
                 @Override
                 public JavaArchive get() {
                     JavaArchive war = ShrinkWrap.create(JavaArchive.class);

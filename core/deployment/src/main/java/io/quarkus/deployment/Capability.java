@@ -35,6 +35,8 @@ public interface Capability {
 
     String JSONB = QUARKUS_PREFIX + "jsonb";
 
+    String HAL = QUARKUS_PREFIX + "hal";
+
     String REST = QUARKUS_PREFIX + "rest";
     String REST_CLIENT = REST + ".client";
     String REST_JACKSON = REST + ".jackson";
@@ -80,6 +82,7 @@ public interface Capability {
 
     String QUARTZ = QUARKUS_PREFIX + "quartz";
     String KUBERNETES_SERVICE_BINDING = QUARKUS_PREFIX + "kubernetes.service.binding";
+    String KUBERNETES_CLIENT = QUARKUS_PREFIX + "kubernetes.client";
 
     /**
      * @deprecated
@@ -121,4 +124,7 @@ public interface Capability {
 
     String APICURIO_REGISTRY = QUARKUS_PREFIX + "apicurio.registry";
     String APICURIO_REGISTRY_AVRO = APICURIO_REGISTRY + ".avro";
+
+    String CONFLUENT_REGISTRY = QUARKUS_PREFIX + "confluent.registry";
+    String CONFLUENT_REGISTRY_AVRO = CONFLUENT_REGISTRY + ".avro";
 }

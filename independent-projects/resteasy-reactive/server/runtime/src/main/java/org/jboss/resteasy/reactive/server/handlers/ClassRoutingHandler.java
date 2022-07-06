@@ -21,7 +21,6 @@ import org.jboss.resteasy.reactive.server.core.ResteasyReactiveRequestContext;
 import org.jboss.resteasy.reactive.server.jaxrs.ResponseBuilderImpl;
 import org.jboss.resteasy.reactive.server.mapping.RequestMapper;
 import org.jboss.resteasy.reactive.server.mapping.RuntimeResource;
-import org.jboss.resteasy.reactive.server.spi.ServerHttpRequest;
 import org.jboss.resteasy.reactive.server.spi.ServerRestHandler;
 
 public class ClassRoutingHandler implements ServerRestHandler {
@@ -102,14 +101,9 @@ public class ClassRoutingHandler implements ServerRestHandler {
             }
         }
 
-        // use vert.x headers wherever we need header checking because we really don't want to
-        // copy headers as it's a performance killer
-        ServerHttpRequest serverRequest = requestContext.serverRequest();
-
         // according to the spec we need to return HTTP 415 when content-type header doesn't match what is specified in @Consumes
-
         if (!target.value.getConsumes().isEmpty()) {
-            String contentType = serverRequest.getRequestHeader(HttpHeaders.CONTENT_TYPE);
+            String contentType = (String) requestContext.getHeader(HttpHeaders.CONTENT_TYPE, true);
             if (contentType != null) {
                 try {
                     if (MediaTypeHelper.getFirstMatch(
@@ -126,7 +120,7 @@ public class ClassRoutingHandler implements ServerRestHandler {
         if (target.value.getProduces() != null) {
             // there could potentially be multiple Accept headers and we need to response with 406
             // if none match the method's @Produces
-            List<String> accepts = serverRequest.getAllRequestHeaders(HttpHeaders.ACCEPT);
+            List<String> accepts = (List<String>) requestContext.getHeader(HttpHeaders.ACCEPT, false);
             if (!accepts.isEmpty()) {
                 boolean hasAtLeastOneMatch = false;
                 for (int i = 0; i < accepts.size(); i++) {

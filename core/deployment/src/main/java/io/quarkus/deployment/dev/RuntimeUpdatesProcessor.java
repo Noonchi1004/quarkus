@@ -225,7 +225,7 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
                         public void handleChanges(Collection<FileChangeEvent> changes) {
                             //sometimes changes come through as two events
                             //which can cause problems for our CI tests
-                            //and cause unessesary runs.
+                            //and cause unnecessary runs.
                             //we add a half second delay for CI tests, to make sure this does not cause
                             //problems
                             try {
@@ -518,7 +518,7 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
             }
 
             //if there is a deployment problem we always restart on scan
-            //this is because we can't setup the config file watches
+            //this is because we can't set up the config file watches
             //in an ideal world we would just check every resource file for changes, however as everything is already
             //all broken we just assume the reason that they have refreshed is because they have fixed something
             //trying to watch all resource files is complex and this is likely a good enough solution for what is already an edge case
@@ -874,16 +874,16 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
             if (rootPaths.isEmpty() || outputPath == null) {
                 continue;
             }
+            Path outputDir = Paths.get(outputPath);
             final List<Path> roots = rootPaths.stream()
                     .filter(Files::exists)
                     .filter(Files::isReadable)
                     .collect(Collectors.toList());
-            //copy all modified non hot deployment files over
+            //copy all modified non-hot deployment files over
             if (doCopy) {
                 final Set<Path> seen = new HashSet<>(moduleResources);
                 try {
                     for (Path root : roots) {
-                        Path outputDir = Paths.get(outputPath);
                         //since the stream is Closeable, use a try with resources so the underlying iterator is closed
                         try (final Stream<Path> walk = Files.walk(root)) {
                             walk.forEach(path -> {
@@ -927,18 +927,32 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
                 }
             }
 
-            for (Path root : roots) {
-                Path outputDir = Paths.get(outputPath);
-                for (String path : timestampSet.watchedFilePaths.keySet()) {
-                    Path file = root.resolve(path);
+            for (String watchedFilePath : timestampSet.watchedFilePaths.keySet()) {
+                Path watchedFile = Paths.get(watchedFilePath);
+                boolean isAbsolute = watchedFile.isAbsolute();
+                List<Path> watchedRoots = roots;
+                if (isAbsolute) {
+                    // absolute files are assumed to be read directly from the project root.
+                    // They therefore do not get copied to, and deleted from, the outputdir.
+                    watchedRoots = List.of(Path.of("/"));
+                }
+                if (watchedRoots.isEmpty()) {
+                    // this compilation unit has no resource roots, and therefore can not have this file
+                    continue;
+                }
+                boolean pathCurrentlyExisting = false;
+                boolean pathPreviouslyExisting = false;
+                for (Path root : watchedRoots) {
+                    Path file = root.resolve(watchedFilePath);
                     if (file.toFile().exists()) {
+                        pathCurrentlyExisting = true;
                         try {
                             long value = Files.getLastModifiedTime(file).toMillis();
                             Long existing = timestampSet.watchedFileTimestamps.get(file);
                             //existing can be null when running tests
                             //as there is both normal and test resources, but only one set of watched timestampts
                             if (existing != null && value > existing) {
-                                ret.add(path);
+                                ret.add(watchedFilePath);
                                 //a write can be a 'truncate' + 'write'
                                 //if the file is empty we may be seeing the middle of a write
                                 if (Files.size(file) == 0) {
@@ -954,8 +968,8 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
                                 value = Files.getLastModifiedTime(file).toMillis();
 
                                 log.infof("File change detected: %s", file);
-                                if (doCopy && !Files.isDirectory(file)) {
-                                    Path target = outputDir.resolve(path);
+                                if (!isAbsolute && doCopy && !Files.isDirectory(file)) {
+                                    Path target = outputDir.resolve(watchedFilePath);
                                     byte[] data = Files.readAllBytes(file);
                                     try (FileOutputStream out = new FileOutputStream(target.toFile())) {
                                         out.write(data);
@@ -967,51 +981,22 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
                             throw new UncheckedIOException(e);
                         }
                     } else {
-                        timestampSet.watchedFileTimestamps.put(file, 0L);
-                        Path target = outputDir.resolve(path);
-                        try {
-                            FileUtil.deleteDirectory(target);
-                        } catch (IOException e) {
-                            throw new UncheckedIOException(e);
-                        }
+                        Long prevValue = timestampSet.watchedFileTimestamps.put(file, 0L);
+                        pathPreviouslyExisting = pathPreviouslyExisting || (prevValue != null && prevValue > 0);
                     }
                 }
-            }
+                if (!pathCurrentlyExisting) {
+                    if (pathPreviouslyExisting) {
+                        ret.add(watchedFilePath);
+                    }
 
-            // Mostly a copy of the code above but to handle watched files that are set with absolute path (not in the app resources)
-            for (String watchedFilePath : timestampSet.watchedFilePaths.keySet()) {
-                Path watchedFile = Paths.get(watchedFilePath);
-                if (watchedFile.isAbsolute()) {
-                    if (watchedFile.toFile().exists()) {
+                    if (!isAbsolute) {
+                        Path target = outputDir.resolve(watchedFilePath);
                         try {
-                            long value = Files.getLastModifiedTime(watchedFile).toMillis();
-                            Long existing = timestampSet.watchedFileTimestamps.get(watchedFile);
-                            //existing can be null when running tests
-                            //as there is both normal and test resources, but only one set of watched timestampts
-                            if (existing != null && value > existing) {
-                                ret.add(watchedFilePath);
-                                //a write can be a 'truncate' + 'write'
-                                //if the file is empty we may be seeing the middle of a write
-                                if (Files.size(watchedFile) == 0) {
-                                    try {
-                                        Thread.sleep(200);
-                                    } catch (InterruptedException e) {
-                                        //ignore
-                                    }
-                                }
-                                //re-read, as we may have read the original TS if the middle of
-                                //a truncate+write, even if the write had completed by the time
-                                //we read the size
-                                value = Files.getLastModifiedTime(watchedFile).toMillis();
-
-                                log.infof("File change detected: %s", watchedFile);
-                                timestampSet.watchedFileTimestamps.put(watchedFile, value);
-                            }
+                            FileUtil.deleteIfExists(target);
                         } catch (IOException e) {
                             throw new UncheckedIOException(e);
                         }
-                    } else {
-                        timestampSet.watchedFileTimestamps.put(watchedFile, 0L);
                     }
                 }
             }

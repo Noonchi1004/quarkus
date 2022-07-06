@@ -1,6 +1,7 @@
 package io.quarkus.rest.data.panache.deployment.methods;
 
 import static io.quarkus.gizmo.MethodDescriptor.ofMethod;
+import static io.quarkus.rest.data.panache.deployment.utils.SignatureMethodCreator.ofType;
 
 import javax.validation.Valid;
 import javax.ws.rs.core.Response;
@@ -13,7 +14,7 @@ import io.quarkus.gizmo.TryBlock;
 import io.quarkus.rest.data.panache.RestDataResource;
 import io.quarkus.rest.data.panache.deployment.ResourceMetadata;
 import io.quarkus.rest.data.panache.deployment.properties.ResourceProperties;
-import io.quarkus.rest.data.panache.deployment.utils.ResponseImplementor;
+import io.quarkus.rest.data.panache.deployment.utils.SignatureMethodCreator;
 import io.quarkus.rest.data.panache.deployment.utils.UniImplementor;
 import io.smallrye.mutiny.Uni;
 
@@ -101,15 +102,15 @@ public final class AddMethodImplementor extends StandardMethodImplementor {
     @Override
     protected void implementInternal(ClassCreator classCreator, ResourceMetadata resourceMetadata,
             ResourceProperties resourceProperties, FieldDescriptor resourceField) {
-        MethodCreator methodCreator = classCreator.getMethodCreator(METHOD_NAME,
-                isNotReactivePanache() ? Response.class : Uni.class,
+        MethodCreator methodCreator = SignatureMethodCreator.getMethodCreator(METHOD_NAME, classCreator,
+                isNotReactivePanache() ? ofType(Response.class) : ofType(Uni.class, resourceMetadata.getEntityType()),
                 resourceMetadata.getEntityType());
 
         // Add method annotations
         addPathAnnotation(methodCreator, resourceProperties.getPath(RESOURCE_METHOD_NAME));
         addPostAnnotation(methodCreator);
         addConsumesAnnotation(methodCreator, APPLICATION_JSON);
-        addProducesAnnotation(methodCreator, APPLICATION_JSON);
+        addProducesJsonAnnotation(methodCreator, resourceProperties);
         addLinksAnnotation(methodCreator, resourceMetadata.getEntityType(), REL);
         // Add parameter annotations
         if (withValidation) {
@@ -124,7 +125,7 @@ public final class AddMethodImplementor extends StandardMethodImplementor {
             ResultHandle entity = tryBlock.invokeVirtualMethod(
                     ofMethod(resourceMetadata.getResourceClass(), RESOURCE_METHOD_NAME, Object.class, Object.class),
                     resource, entityToSave);
-            tryBlock.returnValue(ResponseImplementor.created(tryBlock, entity));
+            tryBlock.returnValue(responseImplementor.created(tryBlock, entity));
             tryBlock.close();
         } else {
             ResultHandle uniEntity = methodCreator.invokeVirtualMethod(
@@ -132,7 +133,7 @@ public final class AddMethodImplementor extends StandardMethodImplementor {
                     resource, entityToSave);
 
             methodCreator.returnValue(UniImplementor.map(methodCreator, uniEntity, EXCEPTION_MESSAGE,
-                    (body, item) -> body.returnValue(ResponseImplementor.created(body, item))));
+                    (body, item) -> body.returnValue(responseImplementor.created(body, item))));
         }
 
         methodCreator.close();

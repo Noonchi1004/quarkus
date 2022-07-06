@@ -74,6 +74,10 @@ public class OidcRecorder {
     private Uni<TenantConfigContext> createDynamicTenantContext(Vertx vertx,
             OidcTenantConfig oidcConfig, TlsConfig tlsConfig, String tenantId) {
 
+        if (oidcConfig.logout.backchannel.path.isPresent()) {
+            throw new ConfigurationException(
+                    "BackChannel Logout is currently not supported for dynamic tenants");
+        }
         if (!dynamicTenantsConfig.containsKey(tenantId)) {
             Uni<TenantConfigContext> uniContext = createTenantContext(vertx, oidcConfig, tlsConfig, tenantId);
             uniContext.onFailure().transform(t -> logTenantConfigContextFailure(t, tenantId));
@@ -229,7 +233,8 @@ public class OidcRecorder {
 
     protected static OIDCException toOidcException(Throwable cause, String authServerUrl) {
         final String message = OidcCommonUtils.formatConnectionErrorMessage(authServerUrl);
-        return new OIDCException(message, cause);
+        LOG.debug(message);
+        return new OIDCException("OIDC Server is not available", cause);
     }
 
     protected static Uni<OidcProvider> createOidcProvider(OidcTenantConfig oidcConfig, TlsConfig tlsConfig, Vertx vertx) {

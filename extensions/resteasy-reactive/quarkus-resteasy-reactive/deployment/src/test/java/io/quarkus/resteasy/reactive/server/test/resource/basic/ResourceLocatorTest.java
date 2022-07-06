@@ -61,7 +61,7 @@ public class ResourceLocatorTest {
 
     @RegisterExtension
     static QuarkusUnitTest testExtension = new QuarkusUnitTest()
-            .setArchiveProducer(new Supplier<JavaArchive>() {
+            .setArchiveProducer(new Supplier<>() {
                 @Override
                 public JavaArchive get() {
                     JavaArchive war = ShrinkWrap.create(JavaArchive.class);
@@ -114,7 +114,7 @@ public class ResourceLocatorTest {
     }
 
     /**
-     * @tpTestDetails Two matching metods, one a resource locator, the other a resource method.
+     * @tpTestDetails Two matching methods, one a resource locator, the other a resource method.
      * @tpSince RESTEasy 3.0.20
      */
     @Test

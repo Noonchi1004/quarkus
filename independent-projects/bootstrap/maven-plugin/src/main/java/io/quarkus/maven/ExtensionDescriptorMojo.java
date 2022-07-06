@@ -12,19 +12,20 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import io.quarkus.bootstrap.BootstrapConstants;
-import io.quarkus.bootstrap.model.AppArtifactCoords;
-import io.quarkus.bootstrap.model.AppArtifactKey;
-import io.quarkus.bootstrap.model.ApplicationModel;
+import io.quarkus.bootstrap.model.ApplicationModelBuilder;
 import io.quarkus.bootstrap.resolver.maven.BootstrapMavenContext;
 import io.quarkus.bootstrap.resolver.maven.BootstrapMavenException;
 import io.quarkus.bootstrap.resolver.maven.MavenArtifactResolver;
 import io.quarkus.bootstrap.resolver.maven.workspace.LocalProject;
 import io.quarkus.bootstrap.resolver.maven.workspace.LocalWorkspace;
-import io.quarkus.bootstrap.util.DependencyNodeUtils;
+import io.quarkus.bootstrap.util.DependencyUtils;
 import io.quarkus.fs.util.ZipUtils;
+import io.quarkus.maven.ExtensionDescriptorMojo.RemovedResources;
 import io.quarkus.maven.capabilities.CapabilitiesConfig;
 import io.quarkus.maven.capabilities.CapabilityConfig;
 import io.quarkus.maven.dependency.ArtifactCoords;
+import io.quarkus.maven.dependency.ArtifactKey;
+import io.quarkus.maven.dependency.GACTV;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.File;
@@ -46,6 +47,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.apache.maven.artifact.Artifact;
 import org.apache.maven.execution.MavenSession;
 import org.apache.maven.plugin.AbstractMojo;
+import org.apache.maven.plugin.MojoExecution;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugin.logging.Log;
 import org.apache.maven.plugins.annotations.Component;
@@ -73,17 +75,25 @@ import org.eclipse.aether.resolution.DependencyResult;
 import org.eclipse.aether.util.artifact.JavaScopes;
 
 /**
- * Generates Quarkus extension descriptor for the runtime artifact.
- * <p>
- * <p/>
- * Also generates META-INF/quarkus-extension.json which includes properties of
- * the extension such as name, labels, maven coordinates, etc that are used by
- * the tools.
+ * @deprecated in favor of {@code io.quarkus:quarkus-extension-maven-plugin}.
+ *             <p>
+ *             Generates Quarkus extension descriptor for the runtime artifact.
+ *             <p>
+ *             <p/>
+ *             Also generates META-INF/quarkus-extension.json which includes properties of
+ *             the extension such as name, labels, maven coordinates, etc that are used by
+ *             the tools.
  *
  * @author Alexey Loubyansky
  */
+@Deprecated(since = "2.10.0.Final")
 @Mojo(name = "extension-descriptor", defaultPhase = LifecyclePhase.PROCESS_RESOURCES, requiresDependencyResolution = ResolutionScope.COMPILE_PLUS_RUNTIME, threadSafe = true)
 public class ExtensionDescriptorMojo extends AbstractMojo {
+
+    public static class RemovedResources {
+        String key;
+        String resources;
+    }
 
     private static final String GROUP_ID = "group-id";
     private static final String ARTIFACT_ID = "artifact-id";
@@ -153,6 +163,14 @@ public class ExtensionDescriptorMojo extends AbstractMojo {
     List<String> excludedArtifacts;
 
     /**
+     * Resources that should excluded from the classloader and the packaged application.
+     * It is an equivalent of {@code quarkus.class-loading.removed-resources} from {@code application.properties}
+     * but in the `META-INF/quarkus-extension.properties`.
+     */
+    @Parameter
+    List<RemovedResources> removedResources = List.of();
+
+    /**
      * Artifacts that are always loaded parent first when running in dev or test mode. This is an advanced option
      * and should only be used if you are sure that this is the correct solution for the use case.
      * <p>
@@ -193,7 +211,13 @@ public class ExtensionDescriptorMojo extends AbstractMojo {
     @Parameter(property = "skipCodestartValidation")
     boolean skipCodestartValidation;
 
-    AppArtifactCoords deploymentCoords;
+    /**
+     * The context of the execution of the plugin.
+     */
+    @Parameter(defaultValue = "${mojoExecution}", readonly = true, required = true)
+    private MojoExecution mojoExecution;
+
+    ArtifactCoords deploymentCoords;
     CollectResult collectedDeploymentDeps;
     DependencyResult runtimeDeps;
 
@@ -201,6 +225,9 @@ public class ExtensionDescriptorMojo extends AbstractMojo {
 
     @Override
     public void execute() throws MojoExecutionException {
+
+        getLog().warn("This Maven plugin was deprecated in favor of io.quarkus:quarkus-extension-maven-plugin:"
+                + mojoExecution.getVersion() + ", please, update the artifactId of the plugin in your project configuration.");
 
         if (!skipExtensionValidation) {
             validateExtensionDeps();
@@ -246,18 +273,18 @@ public class ExtensionDescriptorMojo extends AbstractMojo {
         if (!conditionalDependencies.isEmpty()) {
             final StringBuilder buf = new StringBuilder();
             int i = 0;
-            buf.append(AppArtifactCoords.fromString(conditionalDependencies.get(i++)).toString());
+            buf.append(ArtifactCoords.fromString(conditionalDependencies.get(i++)).toString());
             while (i < conditionalDependencies.size()) {
-                buf.append(' ').append(AppArtifactCoords.fromString(conditionalDependencies.get(i++)).toString());
+                buf.append(' ').append(ArtifactCoords.fromString(conditionalDependencies.get(i++)).toString());
             }
             props.setProperty(BootstrapConstants.CONDITIONAL_DEPENDENCIES, buf.toString());
         }
         if (!dependencyCondition.isEmpty()) {
             final StringBuilder buf = new StringBuilder();
             int i = 0;
-            buf.append(AppArtifactKey.fromString(dependencyCondition.get(i++)).toGacString());
+            buf.append(ArtifactKey.fromString(dependencyCondition.get(i++)).toGacString());
             while (i < dependencyCondition.size()) {
-                buf.append(' ').append(AppArtifactKey.fromString(dependencyCondition.get(i++)).toGacString());
+                buf.append(' ').append(ArtifactKey.fromString(dependencyCondition.get(i++)).toGacString());
             }
             props.setProperty(BootstrapConstants.DEPENDENCY_CONDITION, buf.toString());
 
@@ -284,22 +311,56 @@ public class ExtensionDescriptorMojo extends AbstractMojo {
 
         if (parentFirstArtifacts != null && !parentFirstArtifacts.isEmpty()) {
             String val = String.join(",", parentFirstArtifacts);
-            props.put(ApplicationModel.PARENT_FIRST_ARTIFACTS, val);
+            props.put(ApplicationModelBuilder.PARENT_FIRST_ARTIFACTS, val);
         }
 
         if (runnerParentFirstArtifacts != null && !runnerParentFirstArtifacts.isEmpty()) {
             String val = String.join(",", runnerParentFirstArtifacts);
-            props.put(ApplicationModel.RUNNER_PARENT_FIRST_ARTIFACTS, val);
+            props.put(ApplicationModelBuilder.RUNNER_PARENT_FIRST_ARTIFACTS, val);
         }
 
         if (excludedArtifacts != null && !excludedArtifacts.isEmpty()) {
             String val = String.join(",", excludedArtifacts);
-            props.put(ApplicationModel.EXCLUDED_ARTIFACTS, val);
+            props.put(ApplicationModelBuilder.EXCLUDED_ARTIFACTS, val);
+        }
+
+        if (!removedResources.isEmpty()) {
+            for (RemovedResources entry : removedResources) {
+                final ArtifactKey key;
+                try {
+                    key = ArtifactKey.fromString(entry.key);
+                } catch (IllegalArgumentException e) {
+                    throw new MojoExecutionException(
+                            "Failed to parse removed resource '" + entry.key + '=' + entry.resources + "'", e);
+                }
+                if (entry.resources == null || entry.resources.isBlank()) {
+                    continue;
+                }
+                final String[] resources = entry.resources.split(",");
+                if (resources.length == 0) {
+                    continue;
+                }
+                final String value;
+                if (resources.length == 1) {
+                    value = resources[0];
+                } else {
+                    final StringBuilder sb = new StringBuilder();
+                    sb.append(resources[0]);
+                    for (int i = 1; i < resources.length; ++i) {
+                        final String resource = resources[i];
+                        if (!resource.isBlank()) {
+                            sb.append(',').append(resource);
+                        }
+                    }
+                    value = sb.toString();
+                }
+                props.setProperty(ApplicationModelBuilder.REMOVED_RESOURCES_DOT + key.toString(), value);
+            }
         }
 
         if (lesserPriorityArtifacts != null && !lesserPriorityArtifacts.isEmpty()) {
             String val = String.join(",", lesserPriorityArtifacts);
-            props.put(ApplicationModel.LESSER_PRIORITY_ARTIFACTS, val);
+            props.put(ApplicationModelBuilder.LESSER_PRIORITY_ARTIFACTS, val);
         }
 
         final Path output = outputDirectory.toPath().resolve(BootstrapConstants.META_INF);
@@ -317,8 +378,7 @@ public class ExtensionDescriptorMojo extends AbstractMojo {
 
         // extension.json
         if (extensionFile == null) {
-            extensionFile = new File(outputDirectory,
-                    "META-INF" + File.separator + BootstrapConstants.QUARKUS_EXTENSION_FILE_NAME);
+            extensionFile = output.resolve(BootstrapConstants.QUARKUS_EXTENSION_FILE_NAME).toFile();
         }
 
         ObjectNode extObject;
@@ -420,11 +480,11 @@ public class ExtensionDescriptorMojo extends AbstractMojo {
             }
         }
         if (artifactNode == null || groupId == null || artifactId == null || version == null) {
-            final AppArtifactCoords coords = new AppArtifactCoords(
+            final ArtifactCoords coords = new GACTV(
                     groupId == null ? project.getGroupId() : groupId,
                     artifactId == null ? project.getArtifactId() : artifactId,
                     null,
-                    "jar",
+                    ArtifactCoords.TYPE_JAR,
                     version == null ? project.getVersion() : version);
             extObject.put("artifact", coords.toString());
         }
@@ -457,17 +517,27 @@ public class ExtensionDescriptorMojo extends AbstractMojo {
         }
 
         String codestartArtifact = getCodestartArtifact(mvalue.asText(), project.getVersion());
-        final AppArtifactCoords codestartArtifactCoords = AppArtifactCoords.fromString(codestartArtifact);
+        final ArtifactCoords codestartArtifactCoords = GACTV.fromString(codestartArtifact);
         codestartObject.put("artifact", codestartArtifactCoords.toString());
         if (!skipCodestartValidation) {
             // first we look for it in the workspace, if it's in there we don't need to actually resolve the artifact, because it might not have been built yet
             if (workspaceProvider.getProject(codestartArtifactCoords.getGroupId(),
-                    codestartArtifactCoords.getArtifactId()) == null) {
-                try {
-                    resolve(new DefaultArtifact(codestartArtifact));
-                } catch (MojoExecutionException e) {
-                    throw new MojoExecutionException("Failed to resolve codestart artifact " + codestartArtifactCoords, e);
+                    codestartArtifactCoords.getArtifactId()) != null) {
+                return;
+            }
+            for (Artifact attached : project.getAttachedArtifacts()) {
+                if (codestartArtifactCoords.getArtifactId().equals(attached.getArtifactId()) &&
+                        codestartArtifactCoords.getClassifier().equals(attached.getClassifier()) &&
+                        codestartArtifactCoords.getType().equals(attached.getType()) &&
+                        codestartArtifactCoords.getVersion().equals(attached.getVersion()) &&
+                        codestartArtifactCoords.getGroupId().equals(attached.getGroupId())) {
+                    return;
                 }
+            }
+            try {
+                resolve(new DefaultArtifact(codestartArtifact));
+            } catch (MojoExecutionException e) {
+                throw new MojoExecutionException("Failed to resolve codestart artifact " + codestartArtifactCoords, e);
             }
         }
     }
@@ -570,7 +640,7 @@ public class ExtensionDescriptorMojo extends AbstractMojo {
                             deps = getMetadataNode(extObject).putArray("extension-dependencies");
                             extensionDeps.set(deps);
                         }
-                        deps.add(new AppArtifactKey(a.getGroupId(), a.getArtifactId(), a.getClassifier(), a.getExtension())
+                        deps.add(ArtifactKey.gact(a.getGroupId(), a.getArtifactId(), a.getClassifier(), a.getExtension())
                                 .toGacString());
                     }
                 }
@@ -619,10 +689,10 @@ public class ExtensionDescriptorMojo extends AbstractMojo {
 
     private void validateExtensionDeps() throws MojoExecutionException {
 
-        final AppArtifactKey rootDeploymentGact = getDeploymentCoords().getKey();
+        final ArtifactKey rootDeploymentGact = getDeploymentCoords().getKey();
         final RootNode rootDeployment = new RootNode(rootDeploymentGact, 2);
         final Artifact artifact = project.getArtifact();
-        final Node rootRuntime = rootDeployment.newChild(new AppArtifactKey(artifact.getGroupId(), artifact.getArtifactId(),
+        final Node rootRuntime = rootDeployment.newChild(ArtifactKey.gact(artifact.getGroupId(), artifact.getArtifactId(),
                 artifact.getClassifier(), artifact.getType()), 1);
 
         rootDeployment.expectedDeploymentNodes.put(rootDeployment.gact, rootDeployment);
@@ -649,11 +719,11 @@ public class ExtensionDescriptorMojo extends AbstractMojo {
             if (rootDeployment.deploymentDepsTotal != 0) {
                 log.error("Deployment artifact " + getDeploymentCoords() +
                         " was found to be missing dependencies on the Quarkus extension artifacts marked with '-' below:");
-                final List<AppArtifactKey> missing = rootDeployment.collectMissingDeploymentDeps(log);
+                final List<ArtifactKey> missing = rootDeployment.collectMissingDeploymentDeps(log);
                 buf.append("Deployment artifact ");
                 buf.append(getDeploymentCoords());
                 buf.append(" is missing the following dependencies from its configuration: ");
-                final Iterator<AppArtifactKey> i = missing.iterator();
+                final Iterator<ArtifactKey> i = missing.iterator();
                 buf.append(i.next());
                 while (i.hasNext()) {
                     buf.append(", ").append(i.next());
@@ -669,7 +739,7 @@ public class ExtensionDescriptorMojo extends AbstractMojo {
                     buf.append(System.lineSeparator());
                 }
                 buf.append("The following deployment artifact(s) appear on the runtime classpath: ");
-                final Iterator<AppArtifactKey> i = rootDeployment.deploymentsOnRtCp.iterator();
+                final Iterator<ArtifactKey> i = rootDeployment.deploymentsOnRtCp.iterator();
                 buf.append(i.next());
                 while (i.hasNext()) {
                     buf.append(", ").append(i.next());
@@ -677,9 +747,9 @@ public class ExtensionDescriptorMojo extends AbstractMojo {
             }
 
             if (!rootDeployment.unexpectedDeploymentDeps.isEmpty()) {
-                final List<AppArtifactKey> unexpectedRtDeps = new ArrayList<>(0);
-                final List<AppArtifactKey> unexpectedDeploymentDeps = new ArrayList<>(0);
-                for (Map.Entry<AppArtifactKey, org.eclipse.aether.artifact.Artifact> e : rootDeployment.unexpectedDeploymentDeps
+                final List<ArtifactKey> unexpectedRtDeps = new ArrayList<>(0);
+                final List<ArtifactKey> unexpectedDeploymentDeps = new ArrayList<>(0);
+                for (Map.Entry<ArtifactKey, org.eclipse.aether.artifact.Artifact> e : rootDeployment.unexpectedDeploymentDeps
                         .entrySet()) {
                     if (rootDeployment.allDeploymentDeps.contains(e.getKey())) {
                         unexpectedDeploymentDeps.add(e.getKey());
@@ -695,7 +765,7 @@ public class ExtensionDescriptorMojo extends AbstractMojo {
                     buf.append("The deployment artifact " + rootDeploymentGact
                             + " depends on the following Quarkus extension runtime artifacts that weren't found among the dependencies of "
                             + project.getArtifact() + ":");
-                    for (AppArtifactKey a : unexpectedRtDeps) {
+                    for (ArtifactKey a : unexpectedRtDeps) {
                         buf.append(' ').append(a);
                     }
                     log.error("The deployment artifact " + rootDeploymentGact
@@ -711,7 +781,7 @@ public class ExtensionDescriptorMojo extends AbstractMojo {
                     buf.append("The deployment artifact " + rootDeploymentGact
                             + " depends on the following Quarkus extension deployment artifacts whose corresponding runtime artifacts were not found among the dependencies of "
                             + project.getArtifact() + ":");
-                    for (AppArtifactKey a : unexpectedDeploymentDeps) {
+                    for (ArtifactKey a : unexpectedDeploymentDeps) {
                         buf.append(' ').append(a);
                     }
                     log.error("The deployment artifact " + rootDeploymentGact
@@ -738,13 +808,13 @@ public class ExtensionDescriptorMojo extends AbstractMojo {
         return runtimeDeps;
     }
 
-    private void highlightInTree(DependencyNode node, Collection<AppArtifactKey> keys) {
+    private void highlightInTree(DependencyNode node, Collection<ArtifactKey> keys) {
         highlightInTree(0, node, keys, new HashSet<>(), new StringBuilder(), new ArrayList<>());
     }
 
-    private void highlightInTree(int depth, DependencyNode node, Collection<AppArtifactKey> keysToHighlight,
-            Set<AppArtifactKey> visited, StringBuilder buf, List<String> branch) {
-        final AppArtifactKey key = toKey(node.getArtifact());
+    private void highlightInTree(int depth, DependencyNode node, Collection<ArtifactKey> keysToHighlight,
+            Set<ArtifactKey> visited, StringBuilder buf, List<String> branch) {
+        final ArtifactKey key = toKey(node.getArtifact());
         if (!visited.add(key)) {
             return;
         }
@@ -783,7 +853,7 @@ public class ExtensionDescriptorMojo extends AbstractMojo {
         if (artifact == null) {
             return;
         }
-        final AppArtifactKey key = toKey(artifact);
+        final ArtifactKey key = toKey(artifact);
         if (!rootDeployment.allDeploymentDeps.add(key)) {
             return;
         }
@@ -798,7 +868,7 @@ public class ExtensionDescriptorMojo extends AbstractMojo {
                 }
             }
         } else if (!rootDeployment.allRtDeps.contains(key)) {
-            final AppArtifactKey deployment = getDeploymentKey(artifact);
+            final ArtifactKey deployment = getDeploymentKey(artifact);
             if (deployment != null) {
                 rootDeployment.unexpectedDeploymentDeps.put(deployment, artifact);
             }
@@ -810,7 +880,7 @@ public class ExtensionDescriptorMojo extends AbstractMojo {
             DependencyNode node) throws MojoExecutionException {
         final org.eclipse.aether.artifact.Artifact a = node.getArtifact();
         root.allRtDeps.add(toKey(a));
-        final AppArtifactKey deployment = getDeploymentKey(a);
+        final ArtifactKey deployment = getDeploymentKey(a);
         if (deployment != null) {
             currentNode = currentNode.newChild(deployment, ++currentId);
             root.expectedDeploymentNodes.put(currentNode.gact, currentNode);
@@ -841,7 +911,7 @@ public class ExtensionDescriptorMojo extends AbstractMojo {
         }
     }
 
-    private AppArtifactKey getDeploymentKey(org.eclipse.aether.artifact.Artifact a) throws MojoExecutionException {
+    private ArtifactKey getDeploymentKey(org.eclipse.aether.artifact.Artifact a) throws MojoExecutionException {
         final org.eclipse.aether.artifact.Artifact deployment = getDeploymentArtifact(a);
         return deployment == null ? null : toKey(deployment);
     }
@@ -858,7 +928,7 @@ public class ExtensionDescriptorMojo extends AbstractMojo {
                     + BootstrapConstants.PROP_DEPLOYMENT_ARTIFACT + " property in its "
                     + BootstrapConstants.DESCRIPTOR_PATH);
         }
-        return DependencyNodeUtils.toArtifact(deploymentStr);
+        return DependencyUtils.toArtifact(deploymentStr);
     }
 
     private Properties getExtensionDescriptor(org.eclipse.aether.artifact.Artifact a, boolean packaged) {
@@ -912,13 +982,13 @@ public class ExtensionDescriptorMojo extends AbstractMojo {
         return props;
     }
 
-    private static AppArtifactKey toKey(org.eclipse.aether.artifact.Artifact a) {
-        return DependencyNodeUtils.toKey(a);
+    private static ArtifactKey toKey(org.eclipse.aether.artifact.Artifact a) {
+        return DependencyUtils.getKey(a);
     }
 
     private CollectResult collectDeploymentDeps() throws MojoExecutionException {
         if (collectedDeploymentDeps == null) {
-            final AppArtifactCoords deploymentCoords = getDeploymentCoords();
+            final ArtifactCoords deploymentCoords = getDeploymentCoords();
             try {
                 collectedDeploymentDeps = repoSystem.collectDependencies(repoSession,
                         newCollectRequest(new DefaultArtifact(deploymentCoords.getGroupId(), deploymentCoords.getArtifactId(),
@@ -931,8 +1001,8 @@ public class ExtensionDescriptorMojo extends AbstractMojo {
         return collectedDeploymentDeps;
     }
 
-    private AppArtifactCoords getDeploymentCoords() {
-        return deploymentCoords == null ? deploymentCoords = AppArtifactCoords.fromString(deployment) : deploymentCoords;
+    private ArtifactCoords getDeploymentCoords() {
+        return deploymentCoords == null ? deploymentCoords = ArtifactCoords.fromString(deployment) : deploymentCoords;
     }
 
     private CollectRequest newCollectRuntimeDepsRequest() throws MojoExecutionException {
@@ -1050,16 +1120,16 @@ public class ExtensionDescriptorMojo extends AbstractMojo {
 
     private static class RootNode extends Node {
 
-        final Map<AppArtifactKey, Node> expectedDeploymentNodes = new HashMap<>();
-        final Set<AppArtifactKey> directRuntimeDeps = new HashSet<>();
-        final Set<AppArtifactKey> allRtDeps = new HashSet<>();
-        final Set<AppArtifactKey> allDeploymentDeps = new HashSet<>();
-        final Map<AppArtifactKey, org.eclipse.aether.artifact.Artifact> unexpectedDeploymentDeps = new HashMap<>(0);
+        final Map<ArtifactKey, Node> expectedDeploymentNodes = new HashMap<>();
+        final Set<ArtifactKey> directRuntimeDeps = new HashSet<>();
+        final Set<ArtifactKey> allRtDeps = new HashSet<>();
+        final Set<ArtifactKey> allDeploymentDeps = new HashSet<>();
+        final Map<ArtifactKey, org.eclipse.aether.artifact.Artifact> unexpectedDeploymentDeps = new HashMap<>(0);
 
         int deploymentDepsTotal = 1;
-        List<AppArtifactKey> deploymentsOnRtCp = new ArrayList<>(0);
+        List<ArtifactKey> deploymentsOnRtCp = new ArrayList<>(0);
 
-        RootNode(AppArtifactKey gact, int id) {
+        RootNode(ArtifactKey gact, int id) {
             super(null, gact, id);
         }
 
@@ -1071,26 +1141,26 @@ public class ExtensionDescriptorMojo extends AbstractMojo {
 
     private static class Node {
         final Node parent;
-        final AppArtifactKey gact;
+        final ArtifactKey gact;
         final int id;
         boolean present;
         int runtimeCp;
         List<Node> children = new ArrayList<>(0);
 
-        Node(Node parent, AppArtifactKey gact, int id) {
+        Node(Node parent, ArtifactKey gact, int id) {
             this.parent = parent;
             this.gact = gact;
             this.id = id;
         }
 
-        Node newChild(AppArtifactKey gact, int id) {
+        Node newChild(ArtifactKey gact, int id) {
             final Node child = new Node(this, gact, id);
             children.add(child);
             return child;
         }
 
-        List<AppArtifactKey> collectMissingDeploymentDeps(Log log) {
-            final List<AppArtifactKey> missing = new ArrayList<>();
+        List<ArtifactKey> collectMissingDeploymentDeps(Log log) {
+            final List<ArtifactKey> missing = new ArrayList<>();
             handleChildren(log, 0, missing, (log1, depth, n, collected) -> {
                 final StringBuilder buf = new StringBuilder();
                 if (n.present) {
@@ -1109,8 +1179,8 @@ public class ExtensionDescriptorMojo extends AbstractMojo {
             return missing;
         }
 
-        List<AppArtifactKey> collectDeploymentsOnRtCp(Log log) {
-            final List<AppArtifactKey> missing = new ArrayList<>();
+        List<ArtifactKey> collectDeploymentsOnRtCp(Log log) {
+            final List<ArtifactKey> missing = new ArrayList<>();
             handleChildren(log, 0, missing, (log1, depth, n, collected) -> {
                 if (n.runtimeCp == 0) {
                     return;
@@ -1132,12 +1202,12 @@ public class ExtensionDescriptorMojo extends AbstractMojo {
             return missing;
         }
 
-        private void handle(Log log, int depth, List<AppArtifactKey> collected, NodeHandler handler) {
+        private void handle(Log log, int depth, List<ArtifactKey> collected, NodeHandler handler) {
             handler.handle(log, depth, this, collected);
             handleChildren(log, depth, collected, handler);
         }
 
-        private void handleChildren(Log log, int depth, List<AppArtifactKey> collected, NodeHandler handler) {
+        private void handleChildren(Log log, int depth, List<ArtifactKey> collected, NodeHandler handler) {
             for (Node child : children) {
                 child.handle(log, depth + 1, collected, handler);
             }
@@ -1145,7 +1215,7 @@ public class ExtensionDescriptorMojo extends AbstractMojo {
     }
 
     private static interface NodeHandler {
-        void handle(Log log, int depth, Node n, List<AppArtifactKey> collected);
+        void handle(Log log, int depth, Node n, List<ArtifactKey> collected);
     }
 
     private MavenArtifactResolver resolver() throws MojoExecutionException {

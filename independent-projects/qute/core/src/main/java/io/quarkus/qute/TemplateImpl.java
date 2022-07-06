@@ -1,5 +1,7 @@
 package io.quarkus.qute;
 
+import static io.quarkus.qute.Namespaces.DATA_NAMESPACE;
+
 import io.smallrye.mutiny.Multi;
 import io.smallrye.mutiny.Uni;
 import java.time.Duration;
@@ -11,6 +13,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 import org.jboss.logging.Logger;
 
 class TemplateImpl implements Template {
@@ -22,6 +25,7 @@ class TemplateImpl implements Template {
     private final EngineImpl engine;
     private final Optional<Variant> variant;
     final SectionNode root;
+    private final List<ParameterDeclaration> parameterDeclarations;
 
     TemplateImpl(EngineImpl engine, SectionNode root, String templateId, String generatedId, Optional<Variant> variant) {
         this.engine = engine;
@@ -29,6 +33,8 @@ class TemplateImpl implements Template {
         this.templateId = templateId;
         this.generatedId = generatedId;
         this.variant = variant;
+        // Note that param declarations can be removed if placed on a standalone line
+        this.parameterDeclarations = ImmutableList.copyOf(root.getParameterDeclarations());
     }
 
     @Override
@@ -45,6 +51,16 @@ class TemplateImpl implements Template {
     @Override
     public List<Expression> getExpressions() {
         return root.getExpressions();
+    }
+
+    @Override
+    public Expression findExpression(Predicate<Expression> predicate) {
+        return root.findExpression(predicate);
+    }
+
+    @Override
+    public List<ParameterDeclaration> getParameterDeclarations() {
+        return parameterDeclarations;
     }
 
     @Override
@@ -211,7 +227,7 @@ class TemplateImpl implements Template {
 
         @Override
         public String getNamespace() {
-            return "data";
+            return DATA_NAMESPACE;
         }
 
     }

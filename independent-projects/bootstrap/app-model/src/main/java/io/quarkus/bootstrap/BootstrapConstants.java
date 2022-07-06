@@ -29,6 +29,7 @@ public interface BootstrapConstants {
 
     String DESCRIPTOR_PATH = META_INF + '/' + DESCRIPTOR_FILE_NAME;
     String BUILD_STEPS_PATH = META_INF + "/quarkus-build-steps.list";
+    String EXTENSION_METADATA_PATH = META_INF + '/' + QUARKUS_EXTENSION_FILE_NAME;
 
     String PROP_DEPLOYMENT_ARTIFACT = "deployment-artifact";
     String PROP_PROVIDES_CAPABILITIES = "provides-capabilities";
@@ -43,4 +44,6 @@ public interface BootstrapConstants {
     String PLATFORM_PROPERTIES_ARTIFACT_ID_SUFFIX = "-quarkus-platform-properties";
 
     String PLATFORM_PROPERTY_PREFIX = "platform.";
+
+    String QUARKUS_BOOTSTRAP_WORKSPACE_DISCOVERY = "quarkus.bootstrap.workspace-discovery";
 }

@@ -12,7 +12,6 @@ import java.security.Security;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -47,10 +46,12 @@ import io.quarkus.deployment.builditem.ApplicationClassPredicateBuildItem;
 import io.quarkus.deployment.builditem.FeatureBuildItem;
 import io.quarkus.deployment.builditem.GeneratedNativeImageClassBuildItem;
 import io.quarkus.deployment.builditem.LaunchModeBuildItem;
+import io.quarkus.deployment.builditem.NativeImageFeatureBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.JPMSExportBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.NativeImageSecurityProviderBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.RuntimeReinitializedClassBuildItem;
+import io.quarkus.deployment.pkg.steps.NativeOrNativeSourcesBuild;
 import io.quarkus.gizmo.CatchBlockCreator;
 import io.quarkus.gizmo.ClassCreator;
 import io.quarkus.gizmo.ClassOutput;
@@ -94,7 +95,7 @@ public class SecurityProcessor {
     void produceJcaSecurityProviders(BuildProducer<JCAProviderBuildItem> jcaProviders,
             BuildProducer<BouncyCastleProviderBuildItem> bouncyCastleProvider,
             BuildProducer<BouncyCastleJsseProviderBuildItem> bouncyCastleJsseProvider) {
-        Set<String> providers = new HashSet<>(security.securityProviders.orElse(Collections.emptyList()));
+        Set<String> providers = security.securityProviders.orElse(Set.of());
         for (String providerName : providers) {
             if (SecurityProviderUtils.BOUNCYCASTLE_PROVIDER_NAME.equals(providerName)) {
                 bouncyCastleProvider.produce(new BouncyCastleProviderBuildItem());
@@ -105,7 +106,7 @@ public class SecurityProcessor {
             } else if (SecurityProviderUtils.BOUNCYCASTLE_FIPS_JSSE_PROVIDER_NAME.equals(providerName)) {
                 bouncyCastleJsseProvider.produce(new BouncyCastleJsseProviderBuildItem(true));
             } else {
-                jcaProviders.produce(new JCAProviderBuildItem(providerName));
+                jcaProviders.produce(new JCAProviderBuildItem(providerName, security.securityProviderConfig.get(providerName)));
             }
             log.debugf("Added providerName: %s", providerName);
         }
@@ -121,9 +122,11 @@ public class SecurityProcessor {
      */
     @BuildStep
     void registerJCAProvidersForReflection(BuildProducer<ReflectiveClassBuildItem> classes,
-            List<JCAProviderBuildItem> jcaProviders) throws IOException, URISyntaxException {
+            List<JCAProviderBuildItem> jcaProviders,
+            BuildProducer<NativeImageSecurityProviderBuildItem> additionalProviders) throws IOException, URISyntaxException {
         for (JCAProviderBuildItem provider : jcaProviders) {
-            List<String> providerClasses = registerProvider(provider.getProviderName());
+            List<String> providerClasses = registerProvider(provider.getProviderName(), provider.getProviderConfig(),
+                    additionalProviders);
             for (String className : providerClasses) {
                 classes.produce(new ReflectiveClassBuildItem(true, true, className));
                 log.debugf("Register JCA class: %s", className);
@@ -230,6 +233,20 @@ public class SecurityProcessor {
         }
     }
 
+    @BuildStep(onlyIf = NativeOrNativeSourcesBuild.class)
+    NativeImageFeatureBuildItem bouncyCastleFeature(
+            List<BouncyCastleProviderBuildItem> bouncyCastleProviders,
+            List<BouncyCastleJsseProviderBuildItem> bouncyCastleJsseProviders) {
+
+        Optional<BouncyCastleJsseProviderBuildItem> bouncyCastleJsseProvider = getOne(bouncyCastleJsseProviders);
+        Optional<BouncyCastleProviderBuildItem> bouncyCastleProvider = getOne(bouncyCastleProviders);
+
+        if (bouncyCastleJsseProvider.isPresent() || bouncyCastleProvider.isPresent()) {
+            return new NativeImageFeatureBuildItem("io.quarkus.security.BouncyCastleFeature");
+        }
+        return null;
+    }
+
     @BuildStep
     void addBouncyCastleProvidersToNativeImage(
             BuildProducer<GeneratedNativeImageClassBuildItem> nativeImageClass,
@@ -250,12 +267,11 @@ public class SecurityProcessor {
                 }
             }, "io.quarkus.security.BouncyCastleFeature", null, Object.class.getName(),
                     org.graalvm.nativeimage.hosted.Feature.class.getName());
-            file.addAnnotation("com.oracle.svm.core.annotate.AutomaticFeature");
 
-            MethodCreator beforeAn = file.getMethodCreator("beforeAnalysis", "V",
-                    org.graalvm.nativeimage.hosted.Feature.BeforeAnalysisAccess.class.getName());
+            MethodCreator afterRegistration = file.getMethodCreator("afterRegistration", "V",
+                    org.graalvm.nativeimage.hosted.Feature.AfterRegistrationAccess.class.getName());
 
-            TryBlock overallCatch = beforeAn.tryBlock();
+            TryBlock overallCatch = afterRegistration.tryBlock();
 
             if (bouncyCastleJsseProvider.isPresent()) {
                 // BCJSSE or BCJSSEFIPS
@@ -317,7 +333,7 @@ public class SecurityProcessor {
             // Complete BouncyCastle AutoFeature generation
             CatchBlockCreator print = overallCatch.addCatch(Throwable.class);
             print.invokeVirtualMethod(ofMethod(Throwable.class, "printStackTrace", void.class), print.getCaughtException());
-            beforeAn.returnValue(null);
+            afterRegistration.returnValue(null);
             file.close();
         }
 
@@ -328,14 +344,19 @@ public class SecurityProcessor {
     void addBouncyCastleExportsToNativeImage(BuildProducer<JPMSExportBuildItem> jpmsExports,
             List<BouncyCastleProviderBuildItem> bouncyCastleProviders,
             List<BouncyCastleJsseProviderBuildItem> bouncyCastleJsseProviders) {
+        boolean isInFipsMode;
+
         Optional<BouncyCastleJsseProviderBuildItem> bouncyCastleJsseProvider = getOne(bouncyCastleJsseProviders);
-        if (bouncyCastleJsseProvider.isPresent() && bouncyCastleJsseProvider.get().isInFipsMode()) {
-            jpmsExports.produce(new JPMSExportBuildItem("java.base", "sun.security.internal.spec"));
+        if (bouncyCastleJsseProvider.isPresent()) {
+            isInFipsMode = bouncyCastleJsseProvider.get().isInFipsMode();
         } else {
             Optional<BouncyCastleProviderBuildItem> bouncyCastleProvider = getOne(bouncyCastleProviders);
-            if (bouncyCastleProvider.isPresent() && bouncyCastleProvider.get().isInFipsMode()) {
-                jpmsExports.produce(new JPMSExportBuildItem("java.base", "sun.security.internal.spec"));
-            }
+            isInFipsMode = bouncyCastleProvider.isPresent() && bouncyCastleProvider.get().isInFipsMode();
+        }
+
+        if (isInFipsMode) {
+            jpmsExports.produce(new JPMSExportBuildItem("java.base", "sun.security.internal.spec"));
+            jpmsExports.produce(new JPMSExportBuildItem("java.base", "sun.security.provider"));
         }
     }
 
@@ -352,7 +373,9 @@ public class SecurityProcessor {
      * @param providerName - JCA provider name
      * @return class names that make up the provider and its services
      */
-    private List<String> registerProvider(String providerName) {
+    private List<String> registerProvider(String providerName,
+            String providerConfig,
+            BuildProducer<NativeImageSecurityProviderBuildItem> additionalProviders) {
         List<String> providerClasses = new ArrayList<>();
         Provider provider = Security.getProvider(providerName);
         if (provider != null) {
@@ -365,6 +388,19 @@ public class SecurityProcessor {
                     providerClasses.addAll(Arrays.asList(supportedKeyClasses.split("\\|")));
                 }
             }
+
+            if (providerConfig != null) {
+                Provider configuredProvider = provider.configure(providerConfig);
+                if (configuredProvider != null) {
+                    Security.addProvider(configuredProvider);
+                    providerClasses.add(configuredProvider.getClass().getName());
+                }
+            }
+        }
+
+        if (SecurityProviderUtils.SUN_PROVIDERS.containsKey(providerName)) {
+            additionalProviders.produce(
+                    new NativeImageSecurityProviderBuildItem(SecurityProviderUtils.SUN_PROVIDERS.get(providerName)));
         }
         return providerClasses;
     }
@@ -441,9 +477,9 @@ public class SecurityProcessor {
         for (Map.Entry<MethodInfo, SecurityCheck> methodEntry : securityChecks
                 .entrySet()) {
             MethodInfo method = methodEntry.getKey();
-            String[] params = new String[method.parameters().size()];
-            for (int i = 0; i < method.parameters().size(); ++i) {
-                params[i] = method.parameters().get(i).name().toString();
+            String[] params = new String[method.parametersCount()];
+            for (int i = 0; i < method.parametersCount(); ++i) {
+                params[i] = method.parameterType(i).name().toString();
             }
             recorder.addMethod(builder, method.declaringClass().name().toString(), method.name(), params,
                     methodEntry.getValue());
