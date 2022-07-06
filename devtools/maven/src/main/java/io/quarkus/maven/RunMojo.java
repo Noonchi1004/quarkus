@@ -34,7 +34,7 @@ public class RunMojo extends AbstractMojo {
         }
         try {
             app = new ProcessBuilder()
-                    .command("JavaBinFinder.findBin()", "-jar", "target/quarkus-app/quarkus-run.jar") //getAbsolutePath()?
+                    .command("JavaBinFinder.findBin()", "-jar", "target/quarkus-app/quarkus-run.jar") //Paths.get(project.getBuild().getDirectory()))?
                     .inheritIO()
                     .redirectErrorStream(true)
                     .start();
